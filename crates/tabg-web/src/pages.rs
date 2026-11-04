@@ -377,6 +377,7 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                         (field("Loot amount", "loot_amount", g.loot_amount, "Share of loot spots used, 0–1 (default 0.1)."))
                         (field("Time of day", "time_of_day", g.time_of_day, "0–1 (0.25 = morning)."))
                         (field("Tick rate", "tick_rate", g.tick_rate, "Movement updates per second."))
+                    (field("Voice range (m)", "voice_range", g.voice_range, "For friends with the ProximityChat mod; 0: off."))
                     }
                 }
                 div.row { button { "Save and apply" } span id="result" {} }
@@ -645,6 +646,7 @@ fn settings_from_form(
     parse(f, "loot_amount", &mut c.game.loot_amount)?;
     parse(f, "time_of_day", &mut c.game.time_of_day)?;
     parse(f, "tick_rate", &mut c.game.tick_rate)?;
+    parse(f, "voice_range", &mut c.game.voice_range)?;
     c.rules.respawn = f.contains_key("respawn");
     parse(f, "respawn_delay", &mut c.rules.respawn_delay)?;
     parse(f, "kills_to_win", &mut c.rules.kills_to_win)?;

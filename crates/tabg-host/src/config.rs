@@ -92,6 +92,8 @@ pub struct Game {
     pub loot_amount: f32,
     /// Movement updates per second.
     pub tick_rate: u32,
+    /// Proximity voice range in metres for friends with the ProximityChat mod (0 = off).
+    pub voice_range: f32,
 }
 
 impl Default for Game {
@@ -113,6 +115,7 @@ impl Default for Game {
             time_of_day: d.time_of_day,
             loot_amount: d.loot_keep,
             tick_rate: d.tick_rate,
+            voice_range: d.voice_range,
         }
     }
 }
@@ -319,6 +322,9 @@ impl ServerToml {
         if !(0.0..=1.0).contains(&g.loot_amount) {
             p.push(problem("game.loot_amount", "between 0 and 1"));
         }
+        if !(0.0..=1000.0).contains(&g.voice_range) {
+            p.push(problem("game.voice_range", "0 (off) to 1000 metres"));
+        }
         if !(1..=60).contains(&g.tick_rate) {
             p.push(problem("game.tick_rate", "1 to 60 per second"));
         }
@@ -387,6 +393,7 @@ impl ServerToml {
         s.time_of_day = g.time_of_day;
         s.loot_keep = g.loot_amount;
         s.tick_rate = g.tick_rate;
+        s.voice_range = g.voice_range;
         if !self.ring.times.is_empty() {
             s.ring.ring_times.clone_from(&self.ring.times);
         }

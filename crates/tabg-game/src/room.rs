@@ -42,6 +42,7 @@ use crate::rng::Rng;
 use crate::settings::{RoomSettings, SpawnPoint};
 
 mod console;
+mod voice;
 pub use console::{PlayerInfo, RoomEvent};
 
 /// After a match ends, players are disconnected this long later and the room resets (the official
@@ -120,6 +121,8 @@ struct Player {
     respawn_at: Option<f32>,
     /// Gun game level (index into `gun_game`).
     level: usize,
+    /// Voice rate limit: (window start, frames in it).
+    voice_window: (f32, u16),
 }
 
 /// One TABG match.
@@ -261,6 +264,9 @@ impl Room {
 
     /// Handle one packet from `peer`. Unknown or malformed packets are ignored.
     pub fn handle(&mut self, peer: u8, packet: &Packet) -> Vec<Outgoing> {
+        if packet.code == voice::VOICE {
+            return self.voice(peer, &packet.payload);
+        }
         match packet.event() {
             Some(EventCode::RoomInit) => match RoomInitRequest::decode(&packet.payload) {
                 Ok(req) => self.room_init(peer, req),
@@ -570,6 +576,7 @@ impl Room {
                 last_parrot: f32::MIN,
                 respawn_at: None,
                 level: 0,
+                voice_window: (f32::MIN, 0),
             },
         );
 
@@ -3261,5 +3268,45 @@ mod tests {
         assert_eq!(room.state(), game_state::STARTED);
         run(&mut room, 9.0, 12.0);
         assert_eq!(room.state(), game_state::ENDED);
+    }
+
+    fn voice_frame(sender: u8) -> Packet {
+        let mut payload = vec![1, sender, 7, 0, 0x80, 0x3e, 1, 1, 0x40, 0x01];
+        payload.extend(std::iter::repeat_n(128u8, 320));
+        Packet { code: 240, payload }
+    }
+
+    #[test]
+    fn voice_reaches_players_in_range_with_the_real_sender() {
+        let mut room = Room::new(lobby());
+        for (peer, name) in [(0, "a"), (1, "b"), (2, "c")] {
+            join(&mut room, peer, name);
+            enter(&mut room, peer);
+        }
+        room.players.get_mut(&2).unwrap().position = [500.0, 0.0, 0.0];
+        room.players.get_mut(&0).unwrap().position = [0.0; 3];
+        room.players.get_mut(&1).unwrap().position = [10.0, 0.0, 0.0];
+        // A spoofed sender byte is replaced.
+        let out = room.handle(0, &voice_frame(9));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].to, Recipients::Many(vec![1]), "c is too far away");
+        assert!(!out[0].reliable);
+        assert_eq!(out[0].packet.payload[1], 0);
+        // Rate limit: at most 60 frames a second.
+        let sent = (0..100)
+            .filter(|_| !room.handle(0, &voice_frame(0)).is_empty())
+            .count();
+        assert_eq!(sent, 59, "60 per second including the first one");
+        // Garbage is dropped.
+        assert!(
+            room.handle(
+                1,
+                &Packet {
+                    code: 240,
+                    payload: vec![2, 0, 0]
+                }
+            )
+            .is_empty()
+        );
     }
 }

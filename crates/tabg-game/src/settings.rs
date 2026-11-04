@@ -69,6 +69,8 @@ pub struct RoomSettings {
     pub respawn: Option<Respawn>,
     /// With respawns: the match ends after this many seconds (0 = no limit); most kills wins.
     pub time_limit: f32,
+    /// Proximity voice chat range in metres for the ProximityChat client mod (0 = off).
+    pub voice_range: f32,
     /// Gun game: each kill moves the killer to the next level's items; finishing the last level
     /// wins. Empty = off.
     pub gun_game: Vec<Vec<(i32, i32)>>,
@@ -111,6 +113,7 @@ impl Default for RoomSettings {
             respawn: None,
             time_limit: 0.0,
             gun_game: Vec::new(),
+            voice_range: 50.0,
             tick_rate: 30,
             seed: 0x7ab6,
         }
