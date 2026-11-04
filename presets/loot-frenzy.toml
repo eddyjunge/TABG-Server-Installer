@@ -1,6 +1,10 @@
 title = "Loot Frenzy"
 description = "Four times the loot of a normal match, and everyone lands with bandages."
 
+[config.rules]
+respawn = false
+gun_game = []
+
 [config.game]
 mode = "battle_royale"
 loot_amount = 0.4

@@ -1,6 +1,10 @@
 title = "Solo Royale"
 description = "Battle Royale where everyone fights alone."
 
+[config.rules]
+respawn = false
+gun_game = []
+
 [config.game]
 mode = "battle_royale"
 teams = "solo"

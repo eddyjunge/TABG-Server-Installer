@@ -18,6 +18,13 @@ pub struct ForceStart {
     pub min_players: u8,
 }
 
+/// Respawning instead of staying dead (deathmatch, gun game).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Respawn {
+    /// Seconds between death and respawn.
+    pub delay: f32,
+}
+
 /// Room configuration. Defaults follow TABG's stock `game_settings.txt`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoomSettings {
@@ -56,7 +63,15 @@ pub struct RoomSettings {
     /// Items `(id, quantity)` every player gets straight into their inventory on landing.
     pub loadout: Vec<(i32, i32)>,
     pub lives_per_team: i32,
+    /// With respawns: the first team to this many kills wins (0 = no limit).
     pub kills_to_win: u16,
+    /// Dead players come back (at a random loot spot inside the ring) instead of staying dead.
+    pub respawn: Option<Respawn>,
+    /// With respawns: the match ends after this many seconds (0 = no limit); most kills wins.
+    pub time_limit: f32,
+    /// Gun game: each kill moves the killer to the next level's items; finishing the last level
+    /// wins. Empty = off.
+    pub gun_game: Vec<Vec<(i32, i32)>>,
     /// Movement updates per second (the official server uses 30).
     pub tick_rate: u32,
     /// Seed for ring positions and the plane path.
@@ -93,6 +108,9 @@ impl Default for RoomSettings {
             loadout: Vec::new(),
             lives_per_team: 256,
             kills_to_win: 20,
+            respawn: None,
+            time_limit: 0.0,
+            gun_game: Vec::new(),
             tick_rate: 30,
             seed: 0x7ab6,
         }

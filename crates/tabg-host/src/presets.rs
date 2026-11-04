@@ -137,7 +137,7 @@ pub fn save(
     }
     let mut cfg = toml::Table::new();
     let full = toml::Table::try_from(config).map_err(|e| e.to_string())?;
-    for key in ["game", "ring", "loadout"] {
+    for key in ["game", "ring", "rules", "loadout"] {
         if let Some(v) = full.get(key) {
             cfg.insert(key.into(), v.clone());
         }

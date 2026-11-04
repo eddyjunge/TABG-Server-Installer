@@ -1,6 +1,10 @@
 title = "Quick Match"
 description = "For a few friends: short countdown, more loot and a ring that moves twice as fast."
 
+[config.rules]
+respawn = false
+gun_game = []
+
 [config.game]
 mode = "battle_royale"
 teams = "solo"

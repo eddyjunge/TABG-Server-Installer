@@ -1,0 +1,23 @@
+title = "Deathmatch"
+description = "Respawn 5 s after dying, armed, at a random spot inside the ring. First to 20 kills (or the most after 15 minutes) wins."
+
+[config.game]
+mode = "battle_royale"
+teams = "solo"
+players_to_start = 2
+countdown = 10
+loot_amount = 0.1
+
+[config.rules]
+respawn = true
+respawn_delay = 5
+kills_to_win = 20
+time_limit = 900
+gun_game = []
+
+[config]
+loadout = [
+  { item = 160, qty = 1 },   # M16
+  { item = 6, qty = 240 },   # Normal Ammo
+  { item = 131, qty = 3 },   # Bandage
+]

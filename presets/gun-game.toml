@@ -1,0 +1,37 @@
+title = "Gun Game"
+description = "Every kill gives you the next weapon; the first to get a kill with the katana wins. Respawn after 3 s."
+
+[config.game]
+mode = "battle_royale"
+teams = "solo"
+players_to_start = 2
+countdown = 10
+loot_amount = 0
+
+[config.rules]
+respawn = true
+respawn_delay = 3
+kills_to_win = 0
+time_limit = 1200
+gun_game = [
+  [{ item = 273, qty = 1 }],   # Hand Gun
+  [{ item = 277, qty = 1 }],   # m1911
+  [{ item = 266, qty = 1 }],   # Desert Eagle
+  [{ item = 308, qty = 1 }],   # Mac-10
+  [{ item = 310, qty = 1 }],   # MP5-K
+  [{ item = 297, qty = 1 }],   # Mossberg-500
+  [{ item = 152, qty = 1 }],   # AK-47
+  [{ item = 160, qty = 1 }],   # M16
+  [{ item = 321, qty = 1 }],   # Kar98K
+  [{ item = 254, qty = 1 }],   # Katana
+]
+
+[config]
+# Ammo for every level, handed out on landing and on each respawn.
+loadout = [
+  { item = 6, qty = 240 },   # Normal Ammo
+  { item = 9, qty = 240 },   # Small Ammo
+  { item = 1, qty = 120 },   # Big Ammo
+  { item = 8, qty = 60 },    # Shotgun Ammo
+  { item = 131, qty = 3 },   # Bandage
+]

@@ -1,6 +1,10 @@
 title = "Battle Royale"
 description = "TABG as Landfall ships it: squads, 2 players to start, map loot and ring."
 
+[config.rules]
+respawn = false
+gun_game = []
+
 [config.game]
 mode = "battle_royale"
 teams = "squad"

@@ -16,4 +16,4 @@ mod settings;
 
 pub use ring::RingRules;
 pub use room::{Outgoing, PlayerInfo, RESTART_AFTER_END, Recipients, Room, RoomEvent};
-pub use settings::{ForceStart, RoomSettings, SpawnPoint};
+pub use settings::{ForceStart, Respawn, RoomSettings, SpawnPoint};

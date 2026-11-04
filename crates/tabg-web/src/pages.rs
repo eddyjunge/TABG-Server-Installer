@@ -424,7 +424,15 @@ pub async fn loadout(State(app): State<AppState>) -> Markup {
                 }
                 div.row style="margin-top:10px" { button { "Save loadout" } span id="loadout-result" {} }
             }
-            form.card hx-post="/ui/ring" hx-target="#ring-result" {
+            form.card hx-post="/ui/gun_game" hx-target="#gg-result" {
+            h2 style="margin-top:0" { "Gun game levels" }
+            p.muted { "One level per line as " code { "item:qty, item:qty" } ". Each kill moves the killer to the next line; finishing the last one wins. Needs respawns (Settings → Rules). Empty: off." }
+            textarea name="levels" rows="6" {
+                (c.rules.gun_game.iter().map(|level| level.iter().map(|i| format!("{}:{}", i.item, i.qty)).collect::<Vec<_>>().join(", ")).collect::<Vec<_>>().join("\n"))
+            }
+            div.row style="margin-top:10px" { button { "Save levels" } span id="gg-result" {} }
+        }
+        form.card hx-post="/ui/ring" hx-target="#ring-result" {
                 h2 style="margin-top:0" { "Ring" }
                 p.muted { "Comma-separated, one value per ring (6 rings on the main map). Empty keeps the map's own values." }
                 div.grid {
@@ -637,6 +645,10 @@ fn settings_from_form(
     parse(f, "loot_amount", &mut c.game.loot_amount)?;
     parse(f, "time_of_day", &mut c.game.time_of_day)?;
     parse(f, "tick_rate", &mut c.game.tick_rate)?;
+    c.rules.respawn = f.contains_key("respawn");
+    parse(f, "respawn_delay", &mut c.rules.respawn_delay)?;
+    parse(f, "kills_to_win", &mut c.rules.kills_to_win)?;
+    parse(f, "time_limit", &mut c.rules.time_limit)?;
     Ok(c)
 }
 
@@ -744,6 +756,33 @@ pub async fn action(
                     .push(tabg_host::config::LoadoutItem { item, qty });
             }
             answer(apply_answer(run_apply(&app, next, "loadout".into()).await))
+        }
+        "gun_game" => {
+            let mut next = current;
+            let mut levels = Vec::new();
+            for (n, line) in get("levels").lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let mut level = Vec::new();
+                for part in line.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                    let (item, qty) = part.split_once(':').unwrap_or((part, "1"));
+                    match (item.trim().parse::<i32>(), qty.trim().parse::<i32>()) {
+                        (Ok(item), Ok(qty)) => {
+                            level.push(tabg_host::config::LoadoutItem { item, qty })
+                        }
+                        _ => {
+                            return answer(
+                                html! { span.bad { "line " (n + 1) ": " (part) " is not item:qty" } },
+                            );
+                        }
+                    }
+                }
+                levels.push(level);
+            }
+            next.rules.gun_game = levels;
+            answer(apply_answer(run_apply(&app, next, "gun game".into()).await))
         }
         "ring" => {
             let mut next = current;

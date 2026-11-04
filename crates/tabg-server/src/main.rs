@@ -61,6 +61,12 @@ struct Args {
     /// Items everyone gets on landing, as `item:qty,item:qty` (e.g. `160:1,6:240`).
     #[arg(long, value_parser = parse_loadout)]
     loadout: Option<Loadout>,
+    /// Respawn dead players after this many seconds (deathmatch).
+    #[arg(long)]
+    respawn: Option<f32>,
+    /// With --respawn: the first team to this many kills wins (0 = no limit).
+    #[arg(long, default_value_t = 20)]
+    kills_to_win: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +129,8 @@ fn main() {
         seed,
         admins: args.admins.clone(),
         loadout,
+        respawn: args.respawn.map(|delay| tabg_game::Respawn { delay }),
+        kills_to_win: args.kills_to_win,
         spawn_points: vec![SpawnPoint {
             position: FALLBACK_SPAWN,
             rotation: 0.0,

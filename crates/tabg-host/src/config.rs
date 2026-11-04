@@ -141,6 +141,34 @@ fn one() -> i32 {
     1
 }
 
+/// Match rules beyond plain Battle Royale.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Rules {
+    /// Dead players come back (deathmatch, gun game).
+    pub respawn: bool,
+    /// Seconds before coming back.
+    pub respawn_delay: f32,
+    /// With respawns: first team to this many kills wins (0 = no limit).
+    pub kills_to_win: u16,
+    /// With respawns: the match ends after this many seconds; most kills wins (0 = no limit).
+    pub time_limit: f32,
+    /// Gun game levels: each kill moves you to the next level's items; finishing wins.
+    pub gun_game: Vec<Vec<LoadoutItem>>,
+}
+
+impl Default for Rules {
+    fn default() -> Self {
+        Self {
+            respawn: false,
+            respawn_delay: 5.0,
+            kills_to_win: 20,
+            time_limit: 0.0,
+            gun_game: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Players {
@@ -168,7 +196,8 @@ pub struct ServerToml {
     pub network: Network,
     pub game: Game,
     pub ring: Ring,
-    /// Items every player gets on landing.
+    pub rules: Rules,
+    /// Items every player gets on landing (and on every respawn).
     pub loadout: Vec<LoadoutItem>,
     pub players: Players,
     pub mods: Mods,
@@ -183,6 +212,7 @@ impl Default for ServerToml {
             network: Network::default(),
             game: Game::default(),
             ring: Ring::default(),
+            rules: Rules::default(),
             loadout: Vec::new(),
             players: Players::default(),
             mods: Mods::default(),
@@ -307,6 +337,28 @@ impl ServerToml {
                 "each ring must be smaller than the one before",
             ));
         }
+        let r = &self.rules;
+        if !(0.0..=120.0).contains(&r.respawn_delay) {
+            p.push(problem("rules.respawn_delay", "0 to 120 seconds"));
+        }
+        if r.time_limit < 0.0 {
+            p.push(problem("rules.time_limit", "0 (none) or more seconds"));
+        }
+        if !r.gun_game.is_empty() && !r.respawn {
+            p.push(problem("rules.gun_game", "gun game needs respawn = true"));
+        }
+        for (level, items) in r.gun_game.iter().enumerate() {
+            if items.is_empty()
+                || items
+                    .iter()
+                    .any(|i| i.item < 0 || !(1..=999).contains(&i.qty))
+            {
+                p.push(problem(
+                    &format!("rules.gun_game[{level}]"),
+                    "each level needs items (id ≥ 0, quantity 1 to 999)",
+                ));
+            }
+        }
         for (i, item) in self.loadout.iter().enumerate() {
             if item.item < 0 || !(1..=999).contains(&item.qty) {
                 p.push(problem(
@@ -345,6 +397,17 @@ impl ServerToml {
             s.ring.speeds.clone_from(&self.ring.speeds);
         }
         s.loadout = self.loadout.iter().map(|l| (l.item, l.qty)).collect();
+        let r = &self.rules;
+        s.respawn = r.respawn.then_some(tabg_game::Respawn {
+            delay: r.respawn_delay,
+        });
+        s.kills_to_win = r.kills_to_win;
+        s.time_limit = r.time_limit;
+        s.gun_game = r
+            .gun_game
+            .iter()
+            .map(|level| level.iter().map(|l| (l.item, l.qty)).collect())
+            .collect();
         s.admins.clone_from(&self.players.admins);
         s.banned.clone_from(&self.players.banned);
         s

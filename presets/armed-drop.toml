@@ -1,6 +1,10 @@
 title = "Armed Drop"
 description = "Everyone lands with an M16, ammo and heals: straight into the fight."
 
+[config.rules]
+respawn = false
+gun_game = []
+
 [config.game]
 mode = "battle_royale"
 teams = "solo"

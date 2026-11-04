@@ -116,6 +116,10 @@ struct Player {
     is_admin: bool,
     /// When the parrot last spoke (rate limit 0.5 s).
     last_parrot: f32,
+    /// With respawns: when this dead player comes back.
+    respawn_at: Option<f32>,
+    /// Gun game level (index into `gun_game`).
+    level: usize,
 }
 
 /// One TABG match.
@@ -143,6 +147,8 @@ pub struct Room {
     modifier: u8,
     /// Things worth telling the host about (taken by [`Room::take_events`]).
     events: Vec<RoomEvent>,
+    /// When the current match started.
+    match_started_at: f32,
 }
 
 impl Room {
@@ -167,6 +173,7 @@ impl Room {
             cars: BTreeMap::new(),
             modifier: 0,
             events: Vec::new(),
+            match_started_at: 0.0,
         };
         room.spawn_cars();
         room
@@ -452,12 +459,8 @@ impl Room {
                         EventCode::PlayerLand,
                         packet.payload.clone(),
                     )];
-                    if self.state == game_state::STARTED && !self.settings.loadout.is_empty() {
-                        out.push(Outgoing::reliable(
-                            Recipients::One(peer),
-                            EventCode::PlayerLootRecieved,
-                            encode_player_loot(&self.settings.loadout),
-                        ));
+                    if self.state == game_state::STARTED {
+                        out.extend(self.give_loadout(peer));
                     }
                     out
                 }
@@ -565,6 +568,8 @@ impl Room {
                 seat: None,
                 is_admin: self.is_admin_name(&name, &id),
                 last_parrot: f32::MIN,
+                respawn_at: None,
+                level: 0,
             },
         );
 
@@ -1465,6 +1470,30 @@ impl Room {
             ring_death,
         };
         let mut out = vec![Self::broadcast(EventCode::PlayerDead, dead.encode())];
+        if let Some(respawn) = self.settings.respawn {
+            let now = self.last_now.unwrap_or(0.0);
+            if let Some(p) = self.players.get_mut(&victim) {
+                p.respawn_at = Some(now + respawn.delay.max(0.0));
+            }
+            if !self.settings.gun_game.is_empty() && last_attacker != victim {
+                if let Some(k) = self
+                    .players
+                    .get_mut(&last_attacker)
+                    .filter(|k| k.group != group)
+                {
+                    k.level += 1;
+                    let level = k.level;
+                    if let Some(items) = self.settings.gun_game.get(level) {
+                        out.push(Outgoing::reliable(
+                            Recipients::One(last_attacker),
+                            EventCode::PlayerLootRecieved,
+                            encode_player_loot(items),
+                        ));
+                    }
+                }
+            }
+            return out;
+        }
         if !self.players.values().any(|m| m.group == group && m.alive) {
             let placement = u8::try_from(self.alive_teams().len() + 1).unwrap_or(u8::MAX);
             out.push(Self::broadcast(
@@ -1530,6 +1559,129 @@ impl Room {
     }
 
     /// Groups that still have a living player.
+    /// The landing/respawn items: the loadout plus the player's gun game level.
+    fn give_loadout(&self, peer: u8) -> Vec<Outgoing> {
+        let mut items = self.settings.loadout.clone();
+        if let Some(level) = self.players.get(&peer).and_then(|p| {
+            self.settings
+                .gun_game
+                .get(p.level.min(self.settings.gun_game.len().saturating_sub(1)))
+        }) {
+            items.extend(level.iter().copied());
+        }
+        if items.is_empty() {
+            return Vec::new();
+        }
+        vec![Outgoing::reliable(
+            Recipients::One(peer),
+            EventCode::PlayerLootRecieved,
+            encode_player_loot(&items),
+        )]
+    }
+
+    /// Somewhere on the ground inside the ring: a random loot spot (they sit on floors and
+    /// terrain), else a lobby spawn.
+    fn respawn_position(&mut self) -> [f32; 3] {
+        let (c, r) = (self.ring.white_center, self.ring.white_size * 0.45);
+        let inside: Vec<[f32; 3]> = self
+            .settings
+            .loot
+            .spots
+            .iter()
+            .map(|s| s.position)
+            .filter(|p| (p[0] - c[0]).hypot(p[2] - c[2]) < r)
+            .collect();
+        let pool: Vec<[f32; 3]> = if inside.is_empty() {
+            self.settings
+                .loot
+                .spots
+                .iter()
+                .map(|s| s.position)
+                .collect()
+        } else {
+            inside
+        };
+        if pool.is_empty() {
+            return self.next_spawn_point().position;
+        }
+        let p = pool[self.rng.index(pool.len())];
+        [p[0], p[1] + 1.0, p[2]]
+    }
+
+    /// Bring back dead players whose respawn time has come (`PlayerRespawn`).
+    fn respawn_due(&mut self, now: f32) -> Vec<Outgoing> {
+        let due: Vec<u8> = self
+            .players
+            .values()
+            .filter(|p| p.respawn_at.is_some_and(|t| now >= t))
+            .map(|p| p.index)
+            .collect();
+        let mut out = Vec::new();
+        for peer in due {
+            let position = self.respawn_position();
+            let rotation = self.rng.range(0.0, 360.0);
+            let p = self.players.get_mut(&peer).expect("listed above");
+            p.respawn_at = None;
+            p.alive = true;
+            p.downed = false;
+            p.health = 100.0;
+            p.dropped = true;
+            p.landed = true;
+            p.position = position;
+            p.last_attacker = NOBODY;
+            p.equipment = NO_EQUIPMENT;
+            p.attachments.clear();
+            p.weapon_type = NO_WEAPON;
+            p.seat = None;
+            // [count][index][new index][health][x][y][z][rotation][curse 255 = none]
+            let mut w = tabg_protocol::codec::Writer::new();
+            w.u8(1).u8(peer).u8(peer).f32(100.0);
+            w.f32(position[0])
+                .f32(position[1])
+                .f32(position[2])
+                .f32(rotation)
+                .u8(u8::MAX);
+            out.push(Self::broadcast(EventCode::PlayerRespawn, w.into_inner()));
+            out.extend(self.chunk_changed(peer, chunk_of(position)));
+            out.extend(self.give_loadout(peer));
+        }
+        out
+    }
+
+    /// With respawns: has a team reached the kill limit, finished gun game, or is time up?
+    fn respawn_winner(&self, now: f32) -> Option<u8> {
+        let mut team_kills: BTreeMap<u8, u32> = BTreeMap::new();
+        for p in self.players.values() {
+            *team_kills.entry(p.group).or_default() += u32::from(p.kills);
+        }
+        let best = team_kills
+            .iter()
+            .max_by_key(|(_, k)| **k)
+            .map(|(&team, &kills)| (team, kills));
+        let levels = self.settings.gun_game.len();
+        if levels > 0
+            && let Some(p) = self.players.values().find(|p| p.level >= levels)
+        {
+            return Some(p.group);
+        }
+        let limit = u32::from(self.settings.kills_to_win);
+        if limit > 0
+            && levels == 0
+            && let Some((team, kills)) = best
+            && kills >= limit
+        {
+            return Some(team);
+        }
+        if self.settings.time_limit > 0.0 && now - self.match_started_at >= self.settings.time_limit
+        {
+            return Some(best.map_or(GameStateChanged::NO_WINNER, |(t, _)| t));
+        }
+        if self.players.is_empty() {
+            return Some(GameStateChanged::NO_WINNER);
+        }
+        None
+    }
+
     fn alive_teams(&self) -> Vec<u8> {
         let mut teams: Vec<u8> = self
             .players
@@ -1606,12 +1758,19 @@ impl Room {
                 }
                 let ring_events = self.ring.tick(now, &mut self.rng);
                 out.extend(Self::ring_events(ring_events));
-                let teams = self.alive_teams();
-                if teams.len() <= 1 {
-                    let winner = teams
-                        .first()
-                        .copied()
-                        .unwrap_or(GameStateChanged::NO_WINNER);
+                let winner = if self.settings.respawn.is_some() {
+                    out.extend(self.respawn_due(now));
+                    self.respawn_winner(now)
+                } else {
+                    let teams = self.alive_teams();
+                    (teams.len() <= 1).then(|| {
+                        teams
+                            .first()
+                            .copied()
+                            .unwrap_or(GameStateChanged::NO_WINNER)
+                    })
+                };
+                if let Some(winner) = winner {
                     self.state = game_state::ENDED;
                     self.ended_at = Some(now);
                     let players = self
@@ -1652,7 +1811,10 @@ impl Room {
             p.last_attacker = NOBODY;
             p.kills = 0;
             p.area.clear();
+            p.respawn_at = None;
+            p.level = 0;
         }
+        self.match_started_at = now;
         let (modifier, loot) =
             LootWorld::spawn(&self.settings.loot, self.settings.loot_keep, &mut self.rng);
         self.modifier = modifier;
@@ -2412,10 +2574,14 @@ mod tests {
 
     /// A started match where every player in `peers` has jumped. Squads via `squad`.
     fn fight_room(players: &[(u8, u64)]) -> Room {
+        fight_room_with(RoomSettings::default(), players)
+    }
+
+    fn fight_room_with(settings: RoomSettings, players: &[(u8, u64)]) -> Room {
         let mut room = Room::new(RoomSettings {
             countdown: 1.0,
             players_to_start: players.len() as u8,
-            ..Default::default()
+            ..settings
         });
         for &(peer, squad) in players {
             room.connect(peer);
@@ -3002,5 +3168,98 @@ mod tests {
             loot[0].packet.payload,
             tabg_protocol::actions::encode_player_loot(&[(6, 120), (131, 2)])
         );
+    }
+
+    fn respawn_settings() -> RoomSettings {
+        RoomSettings {
+            respawn: Some(crate::settings::Respawn { delay: 3.0 }),
+            kills_to_win: 2,
+            loot: crate::loot::LootRules {
+                spots: vec![crate::loot::Spot {
+                    position: [10.0, 50.0, 10.0],
+                    force: false,
+                }],
+                modifiers: Vec::new(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn with_respawns_the_dead_come_back_and_kills_decide() {
+        let mut room = fight_room_with(respawn_settings(), &[(0, 1), (1, 2)]);
+        let out = hit(&mut room, 0, 1, 0.0);
+        assert!(events(&out, EventCode::PlayerDead).len() == 1);
+        assert!(
+            events(&out, EventCode::TeamDead).is_empty(),
+            "no elimination with respawns"
+        );
+        assert_eq!(room.state(), game_state::STARTED);
+        // Back after the delay, on the ground at a loot spot.
+        let out = run(&mut room, 1.5, 5.0);
+        let respawn = events(&out, EventCode::PlayerRespawn);
+        assert_eq!(respawn.len(), 1);
+        let payload = &respawn[0].packet.payload;
+        assert_eq!(payload.len(), 1 + 23);
+        assert_eq!(&payload[..3], &[1, 1, 1]);
+        let y = f32::from_le_bytes(payload[11..15].try_into().unwrap());
+        assert_eq!(y, 51.0);
+        assert_eq!(*payload.last().unwrap(), u8::MAX, "no curse");
+        assert!(
+            events(&out, EventCode::ChunkEntry)
+                .iter()
+                .any(|o| o.to == Recipients::One(1))
+        );
+        assert!(room.players()[1].alive);
+        // Second kill reaches kills_to_win = 2.
+        hit(&mut room, 0, 1, 0.0);
+        let out = run(&mut room, 5.0, 5.5);
+        let ended = events(&out, EventCode::GameStateChanged);
+        assert_eq!(room.state(), game_state::ENDED);
+        assert_eq!(
+            GameStateChanged::decode(&ended[0].packet.payload).unwrap(),
+            GameStateChanged::Ended {
+                winner: room.players()[0].team
+            }
+        );
+    }
+
+    #[test]
+    fn gun_game_levels_up_the_killer_and_the_last_level_wins() {
+        let settings = RoomSettings {
+            gun_game: vec![vec![(160, 1)], vec![(152, 1)]],
+            kills_to_win: 0,
+            ..respawn_settings()
+        };
+        let mut room = fight_room_with(settings, &[(0, 1), (1, 2)]);
+        // Landing hands out level 0.
+        let out = room.handle(0, &Packet::new(EventCode::PlayerLand, vec![0]));
+        let loot = events(&out, EventCode::PlayerLootRecieved);
+        assert_eq!(loot[0].packet.payload, encode_player_loot(&[(160, 1)]));
+        // A kill gives the next weapon right away.
+        let out = hit(&mut room, 0, 1, 0.0);
+        let loot = events(&out, EventCode::PlayerLootRecieved);
+        assert_eq!(loot.len(), 1);
+        assert_eq!(loot[0].to, Recipients::One(0));
+        assert_eq!(loot[0].packet.payload, encode_player_loot(&[(152, 1)]));
+        run(&mut room, 1.5, 5.0);
+        hit(&mut room, 0, 1, 0.0);
+        run(&mut room, 5.0, 5.5);
+        assert_eq!(room.state(), game_state::ENDED, "past the last level");
+    }
+
+    #[test]
+    fn time_limit_ends_respawn_matches() {
+        let settings = RoomSettings {
+            kills_to_win: 0,
+            time_limit: 10.0,
+            ..respawn_settings()
+        };
+        let mut room = fight_room_with(settings, &[(0, 1), (1, 2)]);
+        hit(&mut room, 1, 0, 0.0);
+        run(&mut room, 1.5, 9.0);
+        assert_eq!(room.state(), game_state::STARTED);
+        run(&mut room, 9.0, 12.0);
+        assert_eq!(room.state(), game_state::ENDED);
     }
 }
