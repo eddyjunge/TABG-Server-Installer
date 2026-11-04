@@ -48,3 +48,6 @@ Game, Unity and BepInEx assemblies are never committed. The mods compile against
 
 tabg is an unofficial fan project, not affiliated with Landfall Games. It contains no Landfall code
 or assets; map data is extracted from your own copy of the game on your machine. MIT licensed.
+
+Third-party code: `crates/tabg-enet-sys/vendor` contains ENet-CSharp 2.4.8 (MIT, © Stanislav Denisov and
+the ENet authors).
