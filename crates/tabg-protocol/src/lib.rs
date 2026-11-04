@@ -13,6 +13,7 @@ pub mod event;
 pub mod loot;
 pub mod match_flow;
 pub mod messages;
+pub mod vehicles;
 
 pub use codec::{DecodeError, Reader, Writer};
 pub use event::EventCode;

@@ -6,6 +6,7 @@
 //! Current scope: accepting players, sending them the world, replicating movement, and the match
 //! flow (countdown, plane, drops, ring, end). Loot, weapons and damage come next.
 
+pub mod cars;
 pub mod loot;
 pub mod plane;
 pub mod ring;

@@ -620,7 +620,57 @@ pub mod driving_state {
 pub struct PackedQuaternion(pub Vec<u8>);
 
 impl PackedQuaternion {
-    fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+    /// Pack `[x, y, z, w]` exactly like TABG's `OptimizeQuaternion` (largest component dropped,
+    /// the rest as `i16 × 10000`; a single byte for unit axes). Note the official quirk kept here:
+    /// when `x` is the largest, its sign is not applied to the others.
+    pub fn pack(q: [f32; 4]) -> Self {
+        let mut index = 0u8;
+        let mut largest = q[0].abs();
+        let mut sign = 1.0f32;
+        for (i, &v) in q.iter().enumerate().skip(1) {
+            if v.abs() > largest {
+                index = i as u8;
+                largest = v;
+                sign = if v < 0.0 { -1.0 } else { 1.0 };
+            }
+        }
+        if (largest - 1.0).abs() <= f32::EPSILON * 8.0 {
+            return Self(vec![index + 4]);
+        }
+        let mut out = vec![index];
+        for (i, &v) in q.iter().enumerate() {
+            if i != usize::from(index) {
+                let packed = (v * sign * 10000.0) as i16;
+                out.extend_from_slice(&packed.to_le_bytes());
+            }
+        }
+        Self(out)
+    }
+
+    /// Unpack to `[x, y, z, w]` (official `ConstructQuaternion`).
+    pub fn unpack(&self) -> [f32; 4] {
+        let Some(&index) = self.0.first() else {
+            return [0.0, 0.0, 0.0, 1.0];
+        };
+        if index >= 4 || self.0.len() < 7 {
+            let mut q = [0.0; 4];
+            q[usize::from(index.saturating_sub(4)).min(3)] = 1.0;
+            return q;
+        }
+        let v = |i: usize| {
+            f32::from(i16::from_le_bytes([self.0[1 + 2 * i], self.0[2 + 2 * i]])) / 10000.0
+        };
+        let (a, b, c) = (v(0), v(1), v(2));
+        let big = (1.0 - (a * a + b * b + c * c)).max(0.0).sqrt();
+        match index {
+            0 => [big, a, b, c],
+            1 => [a, big, b, c],
+            2 => [a, b, big, c],
+            _ => [a, b, c, big],
+        }
+    }
+
+    pub fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let selector = r.u8()?;
         let mut bytes = vec![selector];
         if selector < 4 {

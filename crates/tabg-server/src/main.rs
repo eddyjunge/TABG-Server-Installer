@@ -122,6 +122,31 @@ fn main() {
             modifiers = settings.loot.modifiers.len(),
             "loaded loot tables"
         );
+        settings.cars = world
+            .cars
+            .iter()
+            .map(|c| tabg_game::cars::CarSpawn {
+                car_type: c.car_type,
+                car_index: c.car_index,
+                position: c.position,
+                rotation: c.rotation,
+                seats: c
+                    .seats
+                    .iter()
+                    .map(|s| (s.network_index, s.driver))
+                    .collect(),
+                parts: c
+                    .parts
+                    .iter()
+                    .map(|p| tabg_protocol::messages::CarPart {
+                        index: p.index,
+                        health: p.health,
+                        name: p.name.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        tracing::info!(cars = settings.cars.len(), "loaded cars");
         if let Some(ring) = world.ring {
             settings.ring.ring_times = ring.ring_times;
             settings.ring.base_time = ring.base_time_to_travel;

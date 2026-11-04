@@ -1,5 +1,6 @@
 use tabg_protocol::messages::{game_mode, match_mode};
 
+use crate::cars::CarSpawn;
 use crate::loot::LootRules;
 use crate::ring::RingRules;
 
@@ -41,6 +42,8 @@ pub struct RoomSettings {
     pub loot: LootRules,
     /// Share of loot spots used per match (`StripLootByPercentage`; the official default is 0.1).
     pub loot_keep: f32,
+    /// Cars and where they stand at the start (from the map data).
+    pub cars: Vec<CarSpawn>,
     pub lives_per_team: i32,
     pub kills_to_win: u16,
     /// Movement updates per second (the official server uses 30).
@@ -71,6 +74,7 @@ impl Default for RoomSettings {
             ring: RingRules::default(),
             loot: LootRules::default(),
             loot_keep: 0.1,
+            cars: Vec::new(),
             lives_per_team: 256,
             kills_to_win: 20,
             tick_rate: 30,

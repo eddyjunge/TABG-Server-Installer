@@ -18,6 +18,8 @@ namespace Tabg.DevAutoJoin
     ///   TABG_AUTOJOIN        "ip:port" to join once the main menu is up
     ///   TABG_AUTOJOIN_QUIT   seconds after joining to quit the game (default: never)
     ///   TABG_AUTOJOIN_SHOTS  comma-separated seconds after joining to take screenshots
+    ///   TABG_AUTOJOIN_JUMP   jump out of the plane at this fraction of its 45 s flight (e.g. 0.5)
+    ///   TABG_AUTOJOIN_SEAT   seconds after jumping to get into the nearest car's driver seat
     ///
     /// Logs scene changes, every event the client receives, and the local player's position, and
     /// saves screenshots to BepInEx/autojoin-*.png.
@@ -32,6 +34,11 @@ namespace Tabg.DevAutoJoin
         private float _sinceJoin = -1f;
         private float _nextStatus;
         private int _shot;
+        private float _jumpAt = -1f;
+        private float _seatAfter = -1f;
+        private float _sinceJump = -1f;
+        private bool _seated;
+        internal static float FlyingSince = -1f;
         private float[] _shotTimes = { 10f, 30f, 50f, 60f, 70f, 85f };
 
         private void Awake()
@@ -56,9 +63,66 @@ namespace Tabg.DevAutoJoin
                 _shotTimes = shots.Split(',').Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
             }
 
+            float.TryParse(Environment.GetEnvironmentVariable("TABG_AUTOJOIN_JUMP"), NumberStyles.Float, CultureInfo.InvariantCulture, out _jumpAt);
+            if (!float.TryParse(Environment.GetEnvironmentVariable("TABG_AUTOJOIN_SEAT"), NumberStyles.Float, CultureInfo.InvariantCulture, out _seatAfter))
+            {
+                _seatAfter = -1f;
+            }
+
+            if (_jumpAt <= 0f)
+            {
+                _jumpAt = -1f;
+            }
+
             SceneManager.sceneLoaded += (scene, mode) => Logger.LogInfo($"scene loaded: {scene.name} ({mode})");
             new Harmony("tabg.dev.autojoin").PatchAll(typeof(DevAutoJoinPlugin).Assembly);
             Logger.LogInfo($"Will join {_target} once the menu is up.");
+        }
+
+        private void TickJumpAndSeat(float dt)
+        {
+            if (_jumpAt > 0f && FlyingSince >= 0f && _sinceJump < 0f && Time.unscaledTime - FlyingSince >= _jumpAt * 45f)
+            {
+                PhotonServerHandler handler = FindObjectOfType<PhotonServerHandler>();
+                if (handler != null)
+                {
+                    Logger.LogInfo("Jumping out of the plane");
+                    handler.ClientRequestPlaneDrop(Vector3.down);
+                }
+
+                _sinceJump = 0f;
+                return;
+            }
+
+            if (_sinceJump < 0f)
+            {
+                return;
+            }
+
+            float before = _sinceJump;
+            _sinceJump += dt;
+            if ((int)(before / 5f) != (int)(_sinceJump / 5f))
+            {
+                Logger.LogInfo($"cars spawned in the scene: {FindObjectsOfType<Car>().Length}");
+            }
+
+            if (_seated || _seatAfter < 0f || _sinceJump < _seatAfter || Camera.main == null)
+            {
+                return;
+            }
+
+            _seated = true;
+            Vector3 me = Camera.main.transform.position;
+            Car nearest = FindObjectsOfType<Car>().OrderBy(c => Vector3.Distance(c.transform.position, me)).FirstOrDefault();
+            Seat seat = nearest != null ? nearest.GetComponentsInChildren<Seat>().OrderBy(st => st.NetworkIndex).FirstOrDefault() : null;
+            if (seat == null)
+            {
+                Logger.LogInfo("No car to sit in");
+                return;
+            }
+
+            Logger.LogInfo($"Getting into {nearest.name} {Vector3.Distance(nearest.transform.position, me):F0} m away (seat {seat.NetworkIndex})");
+            FindObjectOfType<PhotonServerHandler>()?.ClientRequestSeat(seat, SeatAction.GetIn);
         }
 
         private void Update()
@@ -87,6 +151,7 @@ namespace Tabg.DevAutoJoin
             }
 
             _sinceJoin += dt;
+            TickJumpAndSeat(dt);
             if (_shot < _shotTimes.Length && _sinceJoin >= _shotTimes[_shot])
             {
                 string path = Path.Combine(Paths.BepInExRootPath, $"autojoin-{_shot}.png");
@@ -118,6 +183,10 @@ namespace Tabg.DevAutoJoin
         private static void Prefix(ClientPackage clientPackage)
         {
             DevAutoJoinPlugin.Log?.LogInfo($"recv {(byte)clientPackage.Code} {clientPackage.Code} len={clientPackage.Buffer?.Length ?? -1}");
+            if (clientPackage.Code == EventCode.GameStateChanged && clientPackage.Buffer != null && clientPackage.Buffer.Length > 0 && clientPackage.Buffer[0] == (byte)GameState.Flying)
+            {
+                DevAutoJoinPlugin.FlyingSince = Time.unscaledTime;
+            }
         }
     }
 }

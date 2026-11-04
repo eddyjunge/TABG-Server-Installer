@@ -2,6 +2,7 @@
 //! pickups and drops.
 
 use crate::codec::{DecodeError, Reader, Writer};
+use crate::vehicles::ChunkCar;
 
 /// Side length of a chunk in metres.
 pub const CHUNK_SIZE: f32 = 128.0;
@@ -103,13 +104,14 @@ impl ChunkPlayer {
     }
 }
 
-/// `ChunkEntry` (server → one player): players and loot in chunks that just came into view.
-/// Vehicles are not modelled yet and always sent as an empty list.
+/// `ChunkEntry` (server → one player): players, loot and cars in chunks that just came into view.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChunkEntry {
     pub player_index: u8,
     pub players: Vec<ChunkPlayer>,
     pub loot: Vec<LootItem>,
+    /// Not decoded (their size depends on each car's seat count); encoded when present.
+    pub cars: Vec<ChunkCar>,
 }
 
 impl ChunkEntry {
@@ -118,12 +120,15 @@ impl ChunkEntry {
         w.u8(self.player_index)
             .u8(self.players.len() as u8)
             .u16(self.loot.len() as u16)
-            .u16(0);
+            .u16(self.cars.len() as u16);
         for p in &self.players {
             p.write(&mut w);
         }
         for l in &self.loot {
             l.write(&mut w);
+        }
+        for c in &self.cars {
+            c.write(&mut w);
         }
         w.into_inner()
     }
@@ -142,6 +147,7 @@ impl ChunkEntry {
             player_index,
             players,
             loot,
+            cars: Vec::new(),
         })
     }
 }
@@ -152,6 +158,7 @@ pub struct ChunkExit {
     pub player_index: u8,
     pub players: Vec<u8>,
     pub loot: Vec<i32>,
+    pub cars: Vec<i32>,
 }
 
 impl ChunkExit {
@@ -160,25 +167,30 @@ impl ChunkExit {
         w.u8(self.player_index)
             .u8(self.players.len() as u8)
             .u16(self.loot.len() as u16)
-            .u16(0);
+            .u16(self.cars.len() as u16);
         for &p in &self.players {
             w.u8(p);
         }
         for &l in &self.loot {
             w.i32(l);
         }
+        for &c in &self.cars {
+            w.i32(c);
+        }
         w.into_inner()
     }
 
     pub fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader::new(payload);
-        let (player_index, n_players, n_loot, _n_cars) = (r.u8()?, r.u8()?, r.u16()?, r.u16()?);
+        let (player_index, n_players, n_loot, n_cars) = (r.u8()?, r.u8()?, r.u16()?, r.u16()?);
         let players = (0..n_players).map(|_| r.u8()).collect::<Result<_, _>>()?;
         let loot = (0..n_loot).map(|_| r.i32()).collect::<Result<_, _>>()?;
+        let cars = (0..n_cars).map(|_| r.i32()).collect::<Result<_, _>>()?;
         Ok(Self {
             player_index,
             players,
             loot,
+            cars,
         })
     }
 }
@@ -327,6 +339,7 @@ mod tests {
                 quantity: 30,
                 position: [1.0, 2.0, 3.0],
             }],
+            cars: vec![],
         };
         let mut bytes = entry.encode();
         assert_eq!(bytes.len(), 6 + (12 + 4 + 8 + 1 + 12 + 1 + 2) + 24);
@@ -336,6 +349,7 @@ mod tests {
             player_index: 0,
             players: vec![2, 3],
             loot: vec![10, 11],
+            cars: vec![7],
         };
         assert_eq!(ChunkExit::decode(&exit.encode()).unwrap(), exit);
     }

@@ -9,9 +9,14 @@ use tabg_protocol::match_flow::{
     encode_plane_update,
 };
 use tabg_protocol::messages::{
-    ClientPlayerUpdate, EntityUpdate, NO_WEAPON, PackedDirection, PlayerJoined, PlayerUpdateBatch,
-    RoomInitRequest, RoomInitResponse, WorldPhase, WorldPlayer, WorldState, game_state,
+    CarUpdate as MovedCar, ClientPlayerUpdate, EntityBody, EntityUpdate, NO_WEAPON,
+    PackedDirection, PlayerJoined, PlayerUpdateBatch, RoomInitRequest, RoomInitResponse,
+    WorldPhase, WorldPlayer, WorldState, container_flags, driving_state, game_state,
     server_response,
+};
+use tabg_protocol::vehicles::{
+    CarDamageReport, CarTemporaryUpdate, CarUpdate, PassengerUpdate, SEAT_GET_IN, SEAT_GET_OUT,
+    SeatRequest, encode_car_damage, encode_seat_accepted,
 };
 use tabg_protocol::{EventCode, Packet};
 
@@ -21,6 +26,7 @@ use tabg_protocol::loot::{
     encode_player_left_chunk,
 };
 
+use crate::cars::{Car, TEMPORARY_OWNER_SECONDS};
 use crate::loot::LootWorld;
 use crate::plane::{self, Plane};
 
@@ -95,6 +101,8 @@ struct Player {
     equipment: [i16; EQUIPMENT_LEN],
     attachments: Vec<i16>,
     weapon_type: i32,
+    /// `(car index, seat network index, is driver)` while in a car.
+    seat: Option<(i32, i32, bool)>,
 }
 
 /// One TABG match.
@@ -117,6 +125,7 @@ pub struct Room {
     /// Peers the transport should disconnect (taken by [`Room::take_disconnects`]).
     to_disconnect: Vec<u8>,
     loot: LootWorld,
+    cars: BTreeMap<i32, Car>,
     /// Match modifier of the current match ("Normal game", …).
     modifier: u8,
 }
@@ -125,7 +134,7 @@ impl Room {
     pub fn new(settings: RoomSettings) -> Self {
         let mut rng = Rng::new(settings.seed);
         let ring = Ring::new(settings.ring.clone(), &mut rng);
-        Self {
+        let mut room = Self {
             settings,
             pending: Vec::new(),
             players: BTreeMap::new(),
@@ -140,8 +149,33 @@ impl Room {
             ended_at: None,
             to_disconnect: Vec::new(),
             loot: LootWorld::default(),
+            cars: BTreeMap::new(),
             modifier: 0,
+        };
+        room.spawn_cars();
+        room
+    }
+
+    /// Put every car back where the map data has it.
+    fn spawn_cars(&mut self) {
+        self.cars = self
+            .settings
+            .cars
+            .iter()
+            .map(|s| (s.car_index, Car::spawn(s)))
+            .collect();
+    }
+
+    /// Cars standing in `chunks` (none in the lobby, as on the official server).
+    fn cars_in(&self, chunks: &[(i8, i8)]) -> Vec<tabg_protocol::vehicles::ChunkCar> {
+        if self.state == game_state::WAITING_FOR_PLAYERS {
+            return Vec::new();
         }
+        self.cars
+            .values()
+            .filter(|c| chunks.contains(&chunk_of(c.position)))
+            .map(Car::chunk_entry)
+            .collect()
     }
 
     /// Loot currently lying in the world.
@@ -186,6 +220,7 @@ impl Room {
     /// A peer disconnected or timed out.
     pub fn disconnect(&mut self, peer: u8) -> Vec<Outgoing> {
         self.pending.retain(|&p| p != peer);
+        self.eject(peer);
         if self.players.remove(&peer).is_none() {
             return Vec::new();
         }
@@ -240,6 +275,38 @@ impl Room {
                     other => other,
                 };
                 self.relay_from(peer, packet, relayed, Recipients::All)
+            }
+            Some(EventCode::RequestSeat) => match SeatRequest::decode(&packet.payload) {
+                Ok(req) => self.seat(peer, req),
+                Err(_) => Vec::new(),
+            },
+            Some(EventCode::CarUpdate) => match CarUpdate::decode(&packet.payload) {
+                Ok(up) => self.car_update(peer, up),
+                Err(_) => Vec::new(),
+            },
+            Some(EventCode::CarTemporaryUpdate) => {
+                if let Ok(up) = CarTemporaryUpdate::decode(&packet.payload) {
+                    self.car_push(peer, up);
+                }
+                Vec::new()
+            }
+            Some(EventCode::CarDamage) => match CarDamageReport::decode(&packet.payload) {
+                Ok(d) => self.car_damage(peer, d),
+                Err(_) => Vec::new(),
+            },
+            Some(EventCode::PassangerUpdate) => {
+                if let Ok(up) = PassengerUpdate::decode(&packet.payload) {
+                    if let Some(p) = self
+                        .players
+                        .get_mut(&peer)
+                        .filter(|p| up.player_index == peer && p.seat.is_some())
+                    {
+                        p.rotation = up.rotation;
+                        p.ads = up.aiming_down_sights;
+                        p.dirty = true;
+                    }
+                }
+                Vec::new()
             }
             Some(EventCode::RequestWeaponPickUp) => match PickupRequest::decode(&packet.payload) {
                 Ok(req) => self.pickup(peer, req),
@@ -362,6 +429,7 @@ impl Room {
                 equipment: NO_EQUIPMENT,
                 attachments: Vec::new(),
                 weapon_type: NO_WEAPON,
+                seat: None,
             },
         );
 
@@ -442,7 +510,7 @@ impl Room {
             deception_colour: None,
             players,
             weapons: Vec::new(),
-            cars: Vec::new(),
+            cars: self.cars.values().map(Car::world_entry).collect(),
             time_of_day: s.time_of_day,
             time_before_first_ring: s.time_before_first_ring,
             base_ring_time: s.ring.base_time,
@@ -560,6 +628,7 @@ impl Room {
                 .map(Self::chunk_player)
                 .collect(),
             loot: self.loot.in_chunks(&area),
+            cars: self.cars_in(&area),
         };
         let mut out = vec![Outgoing::reliable(
             Recipients::One(peer),
@@ -615,11 +684,18 @@ impl Room {
                 .map(Self::chunk_player)
                 .collect(),
             loot: self.loot.in_chunks(&appeared),
+            cars: self.cars_in(&appeared),
         };
         let exit = ChunkExit {
             player_index: peer,
             players: self.players_in(&vanished, peer).map(|o| o.index).collect(),
             loot: self.loot.ids_in_chunks(&vanished),
+            cars: self
+                .cars
+                .values()
+                .filter(|c| vanished.contains(&chunk_of(c.position)))
+                .map(|c| c.index)
+                .collect(),
         };
         let mut out = vec![
             Outgoing::reliable(Recipients::One(peer), EventCode::ChunkEntry, entry.encode()),
@@ -644,6 +720,174 @@ impl Room {
             ));
         }
         out
+    }
+
+    /// `RequestSeat`: get into or out of a car seat (official `RequestSeatCommand`).
+    fn seat(&mut self, peer: u8, req: SeatRequest) -> Vec<Outgoing> {
+        let now = self.last_now.unwrap_or(0.0);
+        if req.player_index != peer
+            || !self
+                .players
+                .get(&peer)
+                .is_some_and(|p| p.dropped && p.alive && !p.downed)
+        {
+            return Vec::new();
+        }
+        let Some(car) = self.cars.get_mut(&req.car_index) else {
+            return Vec::new();
+        };
+        let Some(seat) = car.seat_mut(req.seat_index) else {
+            return Vec::new();
+        };
+        let (network_index, driver) = (seat.network_index, seat.driver);
+        match req.action {
+            SEAT_GET_IN => {
+                if seat.occupant.is_some_and(|o| o != peer) {
+                    return Vec::new();
+                }
+                seat.occupant = Some(peer);
+                car.temporary_owner = None;
+            }
+            SEAT_GET_OUT => {
+                if seat.occupant.is_some_and(|o| o != peer) {
+                    return Vec::new();
+                }
+                seat.occupant = None;
+                car.temporary_owner = Some((peer, now + TEMPORARY_OWNER_SECONDS));
+            }
+            _ => return Vec::new(),
+        }
+        let pose = (req.action == SEAT_GET_IN).then(|| (car.position, car.rotation.clone()));
+        let car_chunk = chunk_of(car.position);
+        let payload = encode_seat_accepted(
+            peer,
+            req.car_index,
+            network_index,
+            req.action,
+            pose.as_ref().map(|(p, r)| (*p, r)),
+        );
+        // Leave any previous seat (switching seats), then take the new one.
+        let previous = self.players[&peer].seat;
+        if let Some((old_car, old_seat, _)) = previous.filter(|_| req.action == SEAT_GET_IN) {
+            if (old_car, old_seat) != (req.car_index, network_index) {
+                if let Some(c) = self.cars.get_mut(&old_car) {
+                    if let Some(s) = c.seat_mut(old_seat).filter(|s| s.occupant == Some(peer)) {
+                        s.occupant = None;
+                    }
+                }
+            }
+        }
+        let p = self.players.get_mut(&peer).expect("checked above");
+        p.seat = (req.action == SEAT_GET_IN).then_some((req.car_index, network_index, driver));
+        p.dirty = true;
+        let mut to = self.watchers(car_chunk);
+        if !to.contains(&peer) {
+            to.push(peer);
+        }
+        vec![Outgoing::reliable(
+            Recipients::Many(to),
+            EventCode::SeatAccepted,
+            payload,
+        )]
+    }
+
+    /// `CarUpdate` from the driver: the car (and its driver) moved.
+    fn car_update(&mut self, peer: u8, up: CarUpdate) -> Vec<Outgoing> {
+        if up.player_index != peer || !up.position.iter().all(|v| v.is_finite()) {
+            return Vec::new();
+        }
+        let Some(&(car_index, _, true)) = self.players.get(&peer).and_then(|p| p.seat.as_ref())
+        else {
+            return Vec::new();
+        };
+        let Some(car) = self.cars.get_mut(&car_index) else {
+            return Vec::new();
+        };
+        car.position = up.position;
+        car.rotation = up.rotation;
+        car.input = up.input;
+        car.driving_state = up.driving_state;
+        // Everyone in the car moves with it (for chunk visibility).
+        let occupants: Vec<u8> = car.seats.iter().filter_map(|s| s.occupant).collect();
+        let mut out = Vec::new();
+        for o in occupants {
+            if let Some(p) = self.players.get_mut(&o) {
+                p.position = up.position;
+                p.dirty = true;
+                let new_chunk = chunk_of(up.position);
+                if self.state == game_state::STARTED
+                    && p.dropped
+                    && !p.area.is_empty()
+                    && new_chunk != p.chunk
+                {
+                    out.extend(self.chunk_changed(o, new_chunk));
+                }
+            }
+        }
+        out
+    }
+
+    /// `CarTemporaryUpdate`: the last driver pushes the empty car for a few seconds.
+    fn car_push(&mut self, peer: u8, up: CarTemporaryUpdate) {
+        let now = self.last_now.unwrap_or(0.0);
+        let Some(car) = self.cars.get_mut(&up.car_index) else {
+            return;
+        };
+        if up.player_index != peer || !up.position.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        if car
+            .temporary_owner
+            .is_some_and(|(owner, until)| owner == peer && now <= until)
+        {
+            if car.position != up.position {
+                car.temporary_changed = true;
+            }
+            car.position = up.position;
+            car.rotation = up.rotation;
+            car.input = PackedDirection::ZERO;
+        }
+    }
+
+    /// `CarDamage`: a car part was hit; the reporter sends the part's new health.
+    fn car_damage(&mut self, peer: u8, d: CarDamageReport) -> Vec<Outgoing> {
+        if self.state != game_state::STARTED
+            || !self.players.contains_key(&peer)
+            || !d.new_health.is_finite()
+        {
+            return Vec::new();
+        }
+        let Some(car) = self.cars.get_mut(&d.car_index) else {
+            return Vec::new();
+        };
+        let Some(part) = car.parts.iter_mut().find(|p| p.index == d.part) else {
+            return Vec::new();
+        };
+        let dmg = (part.health - d.new_health).max(0.0);
+        part.health -= dmg;
+        let payload = encode_car_damage(d.part, d.car_index, part.health);
+        let car_chunk = chunk_of(car.position);
+        let mut to = self.watchers(car_chunk);
+        if !to.contains(&peer) {
+            to.push(peer);
+        }
+        vec![Outgoing::reliable(
+            Recipients::Many(to),
+            EventCode::CarDamage,
+            payload,
+        )]
+    }
+
+    /// Take a player out of their car seat (downed, dead or gone).
+    fn eject(&mut self, peer: u8) {
+        let Some(p) = self.players.get_mut(&peer) else {
+            return;
+        };
+        if let Some((car, _, _)) = p.seat.take() {
+            if let Some(c) = self.cars.get_mut(&car) {
+                c.eject(peer);
+            }
+        }
     }
 
     /// `RequestWeaponPickUp`: take the item off the map and tell everyone around.
@@ -843,7 +1087,12 @@ impl Room {
         if victim.downed {
             return self.kill(ev.victim, false);
         }
-        // Down instead of dead…
+        // Down instead of dead (and out of any car)…
+        victim.seat = None;
+        for c in self.cars.values_mut() {
+            c.eject(ev.victim);
+        }
+        let victim = self.players.get_mut(&ev.victim).expect("still here");
         victim.downed = true;
         victim.health = 100.0;
         victim.down_time = now;
@@ -884,6 +1133,12 @@ impl Room {
         p.alive = false;
         p.downed = false;
         p.health = 0.0;
+        if let Some((car, _, _)) = p.seat.take() {
+            if let Some(c) = self.cars.get_mut(&car) {
+                c.eject(victim);
+            }
+        }
+        let p = self.players.get_mut(&victim).expect("still here");
         let (group, last_attacker, name) = (p.group, p.last_attacker, p.name.clone());
         if let Some(killer) = self
             .players
@@ -1108,6 +1363,7 @@ impl Room {
         self.ended_at = None;
         self.countdown_left = 0.0;
         self.ring = Ring::new(self.settings.ring.clone(), &mut self.rng);
+        self.spawn_cars();
     }
 
     /// Advance to `now` (seconds since the room started): run the match, and at the tick rate send
@@ -1129,27 +1385,36 @@ impl Room {
 
         // During a match, players still in the plane (or dead) are not replicated.
         let in_match = self.state == game_state::STARTED;
-        let movers: Vec<EntityUpdate> = self
+        let movers: Vec<(EntityUpdate, (i8, i8))> = self
             .players
             .values()
             .filter(|p| p.in_world && p.dirty && (!in_match || (p.dropped && p.alive)))
-            .map(|p| {
-                EntityUpdate::on_foot(
-                    p.index,
-                    p.position,
-                    p.rotation,
-                    p.ads,
-                    p.direction,
-                    p.movement,
-                    0,
+            .map(|p| (self.entity_update(p), chunk_of(p.position)))
+            .collect();
+        // Empty cars pushed around by their last driver.
+        let pushed: Vec<(MovedCar, (i8, i8))> = self
+            .cars
+            .values()
+            .filter(|c| c.temporary_changed)
+            .map(|c| {
+                (
+                    MovedCar {
+                        car_index: c.index,
+                        position: c.position,
+                        rotation: c.rotation.clone(),
+                    },
+                    chunk_of(c.position),
                 )
             })
             .collect();
-        if movers.is_empty() {
+        if movers.is_empty() && pushed.is_empty() {
             return Vec::new();
         }
         for p in self.players.values_mut() {
             p.dirty = false;
+        }
+        for c in self.cars.values_mut() {
+            c.temporary_changed = false;
         }
 
         // In the lobby everyone sees everyone; during the match only what is in the receiver's
@@ -1158,22 +1423,25 @@ impl Room {
             .values()
             .filter(|r| r.in_world)
             .filter_map(|receiver| {
+                let visible = |chunk: &(i8, i8)| !in_match || receiver.area.contains(chunk);
                 let entities: Vec<_> = movers
                     .iter()
-                    .filter(|e| e.player_index != receiver.index)
-                    .filter(|e| {
-                        !in_match || receiver.area.contains(&self.players[&e.player_index].chunk)
-                    })
-                    .cloned()
+                    .filter(|(e, c)| e.player_index != receiver.index && visible(c))
+                    .map(|(e, _)| e.clone())
                     .collect();
-                (!entities.is_empty()).then(|| Outgoing {
+                let cars: Vec<_> = pushed
+                    .iter()
+                    .filter(|(_, c)| visible(c))
+                    .map(|(m, _)| m.clone())
+                    .collect();
+                (!entities.is_empty() || !cars.is_empty()).then(|| Outgoing {
                     to: Recipients::One(receiver.index),
                     packet: Packet::new(
                         EventCode::PlayerUpdate,
                         PlayerUpdateBatch {
                             timestamp: now,
                             entities,
-                            cars: Vec::new(),
+                            cars,
                         }
                         .encode(),
                     ),
@@ -1181,6 +1449,45 @@ impl Room {
                 })
             })
             .collect()
+    }
+
+    /// What others see of `p`: on foot, as a passenger, or as the driver (with the car's pose).
+    fn entity_update(&self, p: &Player) -> EntityUpdate {
+        match p.seat {
+            Some((car_index, _, true)) if self.cars.contains_key(&car_index) => {
+                let car = &self.cars[&car_index];
+                EntityUpdate {
+                    player_index: p.index,
+                    flags: container_flags::ALL,
+                    driving_state: driving_state::DRIVING,
+                    body: EntityBody::Driving {
+                        car_position: Some(car.position),
+                        car_rotation: Some(car.rotation.clone()),
+                        car_input: Some(car.input),
+                        rotation: Some(p.rotation),
+                        car_driving_state: car.driving_state,
+                    },
+                }
+            }
+            Some(_) => EntityUpdate::on_foot(
+                p.index,
+                p.position,
+                p.rotation,
+                p.ads,
+                p.direction,
+                p.movement,
+                driving_state::INSIDE_CAR,
+            ),
+            None => EntityUpdate::on_foot(
+                p.index,
+                p.position,
+                p.rotation,
+                p.ads,
+                p.direction,
+                p.movement,
+                0,
+            ),
+        }
     }
 }
 
@@ -1200,6 +1507,7 @@ mod tests {
     use tabg_protocol::combat::{DamageEvent, PlayerDamaged, PlayerDead, TeamDead};
     use tabg_protocol::loot::{ChunkEntry, ChunkExit, DropRequest, PickupRequest};
     use tabg_protocol::match_flow::{GameStateChanged, PlayerAirplaneDropped, RingUpdate};
+    use tabg_protocol::messages::PackedQuaternion;
     use tabg_protocol::messages::{EntityBody, game_mode};
 
     /// Settings for lobby-only tests: the match never starts.
@@ -1939,5 +2247,149 @@ mod tests {
             room.handle(1, &Packet::new(EventCode::PlayerFire, fire))
                 .is_empty()
         );
+    }
+
+    /// A started match with one car next to where everyone jumped, and two players on foot there.
+    fn car_room() -> (Room, i32) {
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        let here = room.players[&0].position;
+        let spawn = crate::cars::CarSpawn {
+            car_type: 3,
+            car_index: 7,
+            position: here,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            seats: vec![(0, true), (1, false)],
+            parts: vec![tabg_protocol::messages::CarPart {
+                index: 0,
+                health: 500.0,
+                name: "Chassi".into(),
+            }],
+        };
+        room.cars.insert(7, Car::spawn(&spawn));
+        (room, 7)
+    }
+
+    fn seat(room: &mut Room, peer: u8, car: i32, seat: i32, action: u8) -> Vec<Outgoing> {
+        let req = SeatRequest {
+            player_index: peer,
+            car_index: car,
+            seat_index: seat,
+            action,
+        };
+        room.handle(peer, &Packet::new(EventCode::RequestSeat, req.encode()))
+    }
+
+    #[test]
+    fn seats_are_exclusive_and_announced() {
+        let (mut room, car) = car_room();
+        let out = seat(&mut room, 0, car, 0, SEAT_GET_IN);
+        assert_eq!(out[0].packet.event(), Some(EventCode::SeatAccepted));
+        assert_eq!(
+            out[0].packet.payload.len(),
+            10 + 12 + 1,
+            "getting in includes the car pose"
+        );
+        assert!(
+            seat(&mut room, 1, car, 0, SEAT_GET_IN).is_empty(),
+            "driver seat taken"
+        );
+        assert!(
+            !seat(&mut room, 1, car, 1, SEAT_GET_IN).is_empty(),
+            "passenger seat is free"
+        );
+        assert_eq!(room.cars[&car].seats[1].occupant, Some(1));
+        let out = seat(&mut room, 0, car, 0, SEAT_GET_OUT);
+        assert_eq!(out[0].packet.payload.len(), 10);
+        assert_eq!(room.cars[&car].temporary_owner.map(|(o, _)| o), Some(0));
+    }
+
+    #[test]
+    fn driving_moves_the_car_and_replicates_the_driver() {
+        let (mut room, car) = car_room();
+        seat(&mut room, 0, car, 0, SEAT_GET_IN);
+        let mut pos = room.cars[&car].position;
+        pos[0] += 3.0;
+        let up = CarUpdate {
+            player_index: 0,
+            position: pos,
+            rotation: PackedQuaternion::pack([0.0, 0.0, 0.0, 1.0]),
+            input: PackedDirection::ZERO,
+            driving_state: 1,
+        };
+        room.handle(0, &Packet::new(EventCode::CarUpdate, up.encode()));
+        assert_eq!(room.cars[&car].position, pos);
+        let out = room.tick(5.0);
+        let batch =
+            PlayerUpdateBatch::decode(&events(&out, EventCode::PlayerUpdate)[0].packet.payload)
+                .unwrap();
+        assert!(
+            matches!(&batch.entities[0], EntityUpdate { player_index: 0, body: EntityBody::Driving { car_position: Some(p), .. }, .. } if *p == pos)
+        );
+        // A passenger can't drive.
+        seat(&mut room, 1, car, 1, SEAT_GET_IN);
+        let fake = CarUpdate {
+            player_index: 1,
+            ..up
+        };
+        room.handle(1, &Packet::new(EventCode::CarUpdate, fake.encode()));
+        assert_eq!(room.cars[&car].position, pos);
+    }
+
+    #[test]
+    fn only_the_temporary_owner_can_push_and_only_briefly() {
+        let (mut room, car) = car_room();
+        seat(&mut room, 0, car, 0, SEAT_GET_IN);
+        seat(&mut room, 0, car, 0, SEAT_GET_OUT);
+        let push = |room: &mut Room, peer: u8, dx: f32| {
+            let mut p = room.cars[&car].position;
+            p[0] += dx;
+            let up = CarTemporaryUpdate {
+                player_index: peer,
+                position: p,
+                rotation: PackedQuaternion::pack([0.0, 0.0, 0.0, 1.0]),
+                car_index: car,
+            };
+            room.handle(
+                peer,
+                &Packet::new(EventCode::CarTemporaryUpdate, up.encode()),
+            );
+            room.cars[&car].position
+        };
+        let before = room.cars[&car].position;
+        assert_eq!(push(&mut room, 1, 1.0), before, "not the owner");
+        assert_ne!(push(&mut room, 0, 1.0), before);
+        let out = room.tick(4.0);
+        let batch =
+            PlayerUpdateBatch::decode(&events(&out, EventCode::PlayerUpdate)[0].packet.payload)
+                .unwrap();
+        assert_eq!(batch.cars[0].car_index, car);
+        room.tick(10.0);
+        let at = room.cars[&car].position;
+        assert_eq!(push(&mut room, 0, 1.0), at, "ownership expired");
+    }
+
+    #[test]
+    fn car_damage_and_downed_drivers_are_ejected() {
+        let (mut room, car) = car_room();
+        let d = CarDamageReport {
+            part: 0,
+            car_index: car,
+            new_health: 300.0,
+        };
+        let out = room.handle(1, &Packet::new(EventCode::CarDamage, d.encode(1)));
+        assert_eq!(out[0].packet.payload, encode_car_damage(0, car, 300.0));
+        seat(&mut room, 0, car, 0, SEAT_GET_IN);
+        // Player 0 is alone in team 1: going down kills them, and they leave the car.
+        hit(&mut room, 1, 0, 0.0);
+        assert_eq!(room.cars[&car].seats[0].occupant, None);
+    }
+
+    #[test]
+    fn cars_appear_in_chunk_entries_once_the_match_runs() {
+        let (mut room, car) = car_room();
+        let out = room.force_chunk_entry(0);
+        let raw = &events(&out, EventCode::ChunkEntry)[0].packet.payload;
+        assert_eq!(u16::from_le_bytes([raw[4], raw[5]]), 1, "one car in view");
+        assert_eq!(room.cars_in(&[chunk_of(room.cars[&car].position)]).len(), 1);
     }
 }

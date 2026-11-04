@@ -80,6 +80,33 @@ pub struct MatchModifier {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CarSeat {
+    pub network_index: i32,
+    pub driver: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CarPart {
+    pub index: u8,
+    pub health: f32,
+    pub name: String,
+}
+
+/// A car as the official server spawned it on this map.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Car {
+    pub car_type: i32,
+    pub car_index: i32,
+    pub position: [f32; 3],
+    /// Quaternion `[x, y, z, w]`.
+    pub rotation: [f32; 4],
+    #[serde(default)]
+    pub health: f32,
+    pub seats: Vec<CarSeat>,
+    pub parts: Vec<CarPart>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct World {
     pub format: u32,
     pub unity_version: String,
@@ -95,6 +122,8 @@ pub struct World {
     /// Item id (as a string key) → name.
     #[serde(default)]
     pub items: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub cars: Vec<Car>,
 }
 
 impl World {

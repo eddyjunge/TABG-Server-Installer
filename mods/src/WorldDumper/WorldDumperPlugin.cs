@@ -35,11 +35,13 @@ namespace Tabg.WorldDumper
             float before = _elapsed;
             _elapsed += Time.unscaledDeltaTime;
             SpawnPointTAG[] spawns = FindObjectsOfType<SpawnPointTAG>();
-            if (spawns.Length == 0 && _elapsed < GiveUpAfterSeconds)
+            // Cars only exist once the server's game room has started (dedicated server only).
+            bool waitForCars = RoomCars() == null && _elapsed < CarsWaitSeconds;
+            if ((spawns.Length == 0 || waitForCars) && _elapsed < GiveUpAfterSeconds)
             {
                 if ((int)(before / 10f) != (int)(_elapsed / 10f))
                 {
-                    Logger.LogInfo($"Waiting for the map to load ({(int)_elapsed}s)...");
+                    Logger.LogInfo($"Waiting for the map and game room ({(int)_elapsed}s)...");
                 }
 
                 return;
@@ -93,6 +95,8 @@ namespace Tabg.WorldDumper
             AppendRing(sb);
             sb.Append(",\n");
             AppendLoot(sb);
+            sb.Append(",\n");
+            AppendCars(sb);
             sb.Append("}\n");
             return sb.ToString();
         }
@@ -153,6 +157,72 @@ namespace Tabg.WorldDumper
             sb.Append("\n  ],\n  \"items\": {");
             sb.Append(string.Join(", ", names.Select(kv => "\"" + kv.Key.ToString(CultureInfo.InvariantCulture) + "\": " + Quote(kv.Value))));
             sb.Append("}\n");
+        }
+
+        private const float CarsWaitSeconds = 120f;
+
+        private static object Prop(object o, string name)
+        {
+            return o?.GetType().GetProperty(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(o, null);
+        }
+
+        /// <summary>
+        /// The dedicated server's spawned cars (<c>ServerClient.GameRoomReference.Cars</c>), read by
+        /// reflection because these server types don't exist in the client assembly we build against.
+        /// </summary>
+        private static System.Collections.IList RoomCars()
+        {
+            Type serverClient = HarmonyLib.AccessTools.TypeByName("Landfall.Network.ServerClient");
+            UnityEngine.Object sc = serverClient != null ? FindObjectOfType(serverClient) : null;
+            return Prop(Prop(sc, "GameRoomReference"), "Cars") as System.Collections.IList;
+        }
+
+        /// <summary>Every car as the server spawned it: type, index, pose, seats and damageable parts.</summary>
+        private static void AppendCars(StringBuilder sb)
+        {
+            System.Collections.IList cars = RoomCars();
+            sb.Append("  \"cars\": [");
+            if (cars != null)
+            {
+                var entries = new System.Collections.Generic.List<string>();
+                foreach (object car in cars)
+                {
+                    var pos = (Vector3)Prop(car, "CarPosition");
+                    var rot = (Quaternion)Prop(car, "CarRotation");
+                    int seatCount = (int)Prop(car, "NumberOfSeats");
+                    MethodInfoCache getSeat = new MethodInfoCache(car, "GetSeat");
+                    var seats = Enumerable.Range(0, seatCount).Select(i =>
+                    {
+                        object seat = getSeat.Invoke(i);
+                        return "{\"network_index\": " + Prop(seat, "NetworkIndex") + ", \"driver\": " + (((bool?)Prop(seat, "DriverSeat") ?? false) ? "true" : "false") + "}";
+                    });
+                    var parts = ((System.Collections.IEnumerable)Prop(car, "DamagableParts") ?? new object[0]).Cast<object>().Select(p =>
+                        "{\"index\": " + Prop(p, "Index") + ", \"health\": " + F((float)Prop(p, "Health")) + ", \"name\": " + Quote((string)Prop(p, "PartName")) + "}");
+                    entries.Add("    {\"car_type\": " + Prop(car, "CarTypeIdentifier") + ", \"car_index\": " + Prop(car, "CarIndex")
+                        + ", \"position\": [" + F(pos.x) + ", " + F(pos.y) + ", " + F(pos.z) + "]"
+                        + ", \"rotation\": [" + F(rot.x) + ", " + F(rot.y) + ", " + F(rot.z) + ", " + F(rot.w) + "]"
+                        + ", \"health\": " + F((float)Prop(car, "CarHealth"))
+                        + ", \"seats\": [" + string.Join(", ", seats) + "], \"parts\": [" + string.Join(", ", parts) + "]}");
+                }
+
+                sb.Append("\n").Append(string.Join(",\n", entries)).Append("\n  ");
+            }
+
+            sb.Append("]\n");
+        }
+
+        private sealed class MethodInfoCache
+        {
+            private readonly object _target;
+            private readonly System.Reflection.MethodInfo _method;
+
+            public MethodInfoCache(object target, string name)
+            {
+                _target = target;
+                _method = target.GetType().GetMethod(name, new[] { typeof(int) });
+            }
+
+            public object Invoke(int i) => _method?.Invoke(_target, new object[] { i });
         }
 
         /// <summary>The ring prefab's timing and the map's ring hot spots (null if no ring exists).</summary>
