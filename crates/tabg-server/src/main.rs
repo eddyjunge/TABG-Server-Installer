@@ -29,6 +29,10 @@ struct Args {
     /// Countdown length in seconds.
     #[arg(long, default_value_t = 20.0)]
     countdown: f32,
+    /// Player name with admin rights (repeatable; `*` = everyone). Admins can force-start and
+    /// use chat commands: /start, /give <item> [qty], /heal, /kick <name>.
+    #[arg(long = "admin")]
+    admins: Vec<String>,
     /// Seed for ring positions and the plane path (random by default).
     #[arg(long)]
     seed: Option<u64>,
@@ -69,6 +73,7 @@ fn main() {
         players_to_start: args.players_to_start,
         countdown: args.countdown,
         seed,
+        admins: args.admins.clone(),
         spawn_points: vec![SpawnPoint {
             position: FALLBACK_SPAWN,
             rotation: 0.0,
@@ -147,6 +152,12 @@ fn main() {
             })
             .collect();
         tracing::info!(cars = settings.cars.len(), "loaded cars");
+        settings.heal_amounts = world
+            .heal_amounts
+            .iter()
+            .filter_map(|(k, &v)| k.parse().ok().map(|k| (k, v)))
+            .collect();
+        settings.grenades = world.grenades.iter().copied().collect();
         if let Some(ring) = world.ring {
             settings.ring.ring_times = ring.ring_times;
             settings.ring.base_time = ring.base_time_to_travel;

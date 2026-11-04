@@ -20,6 +20,7 @@ namespace Tabg.DevAutoJoin
     ///   TABG_AUTOJOIN_SHOTS  comma-separated seconds after joining to take screenshots
     ///   TABG_AUTOJOIN_JUMP   jump out of the plane at this fraction of its 45 s flight (e.g. 0.5)
     ///   TABG_AUTOJOIN_SEAT   seconds after jumping to get into the nearest car's driver seat
+    ///   TABG_AUTOJOIN_CHAT   "text@seconds" (after joining) to send a chat line, e.g. "/give 131 5@20"
     ///
     /// Logs scene changes, every event the client receives, and the local player's position, and
     /// saves screenshots to BepInEx/autojoin-*.png.
@@ -38,6 +39,8 @@ namespace Tabg.DevAutoJoin
         private float _seatAfter = -1f;
         private float _sinceJump = -1f;
         private bool _seated;
+        private string _chatText;
+        private float _chatAt = -1f;
         internal static float FlyingSince = -1f;
         private float[] _shotTimes = { 10f, 30f, 50f, 60f, 70f, 85f };
 
@@ -67,6 +70,14 @@ namespace Tabg.DevAutoJoin
             if (!float.TryParse(Environment.GetEnvironmentVariable("TABG_AUTOJOIN_SEAT"), NumberStyles.Float, CultureInfo.InvariantCulture, out _seatAfter))
             {
                 _seatAfter = -1f;
+            }
+
+            string chat = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_CHAT");
+            int at = chat?.LastIndexOf('@') ?? -1;
+            if (at > 0 && float.TryParse(chat.Substring(at + 1), NumberStyles.Float, CultureInfo.InvariantCulture, out float chatAt))
+            {
+                _chatText = chat.Substring(0, at);
+                _chatAt = chatAt;
             }
 
             if (_jumpAt <= 0f)
@@ -152,6 +163,12 @@ namespace Tabg.DevAutoJoin
 
             _sinceJoin += dt;
             TickJumpAndSeat(dt);
+            if (_chatAt >= 0f && _sinceJoin >= _chatAt)
+            {
+                _chatAt = -1f;
+                Logger.LogInfo($"Saying: {_chatText}");
+                FindObjectOfType<PhotonServerHandler>()?.SendChatMessage(_chatText);
+            }
             if (_shot < _shotTimes.Length && _sinceJoin >= _shotTimes[_shot])
             {
                 string path = Path.Combine(Paths.BepInExRootPath, $"autojoin-{_shot}.png");

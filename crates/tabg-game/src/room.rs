@@ -1,5 +1,10 @@
 use std::collections::BTreeMap;
 
+use tabg_protocol::actions::{
+    ADMIN_START_GAME, ChatMessage, HealRequest, HealthStateRequest, ProjectileSyncHeader,
+    ThrowRequest, decode_admin_command, encode_item_thrown, encode_player_health,
+    encode_throw_chat,
+};
 use tabg_protocol::combat::{
     DamageEvent, PlayerDamaged, PlayerDead, PlayerFireHeader, ReviveRequest, ReviveStage, TeamDead,
     encode_revive_state, firing_mode,
@@ -103,6 +108,9 @@ struct Player {
     weapon_type: i32,
     /// `(car index, seat network index, is driver)` while in a car.
     seat: Option<(i32, i32, bool)>,
+    is_admin: bool,
+    /// When the parrot last spoke (rate limit 0.5 s).
+    last_parrot: f32,
 }
 
 /// One TABG match.
@@ -276,6 +284,101 @@ impl Room {
                 };
                 self.relay_from(peer, packet, relayed, Recipients::All)
             }
+            Some(EventCode::ChatMessage) => match ChatMessage::decode(&packet.payload) {
+                Ok(msg) if msg.player_index == peer => self.chat(peer, msg, packet),
+                _ => Vec::new(),
+            },
+            Some(EventCode::ThrowChatMessage) => self.parrot(peer, packet),
+            Some(EventCode::RequestHealing) => match HealRequest::decode(&packet.payload) {
+                Ok(req) if req.player_index == peer => self.heal(peer, req.item_id),
+                _ => Vec::new(),
+            },
+            Some(EventCode::RequestHealthState) => {
+                match HealthStateRequest::decode(&packet.payload) {
+                    Ok(req) if req.player_index == peer => self.health_state(peer, req.health),
+                    _ => Vec::new(),
+                }
+            }
+            Some(EventCode::RequestItemThrow) => match ThrowRequest::decode(&packet.payload) {
+                Ok(req) if req.player_index == peer => self.throw(peer, req),
+                _ => Vec::new(),
+            },
+            Some(EventCode::SendCatchPhrase) if self.players.contains_key(&peer) => {
+                vec![Outgoing::reliable(
+                    Recipients::Many(self.same_chunk(peer)),
+                    EventCode::CatchPhrase,
+                    vec![peer],
+                )]
+            }
+            // A dead player picks someone to spectate.
+            Some(EventCode::SpectatorRequest) => {
+                match (self.players.get(&peer), packet.payload.first()) {
+                    (Some(p), Some(&target))
+                        if !p.alive && self.players.get(&target).is_some_and(|t| t.alive) =>
+                    {
+                        vec![Outgoing::reliable(
+                            Recipients::One(peer),
+                            EventCode::SpectatorForce,
+                            vec![target],
+                        )]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            Some(EventCode::RequestTakeDamageEvent) if self.players.contains_key(&peer) => {
+                vec![Outgoing::reliable(
+                    Recipients::Many(self.near(peer)),
+                    EventCode::TakeDamageEvent,
+                    vec![peer],
+                )]
+            }
+            Some(EventCode::NetworkPlayerTransmittedPackage)
+                if self.players.contains_key(&peer) =>
+            {
+                let mut payload = vec![peer];
+                payload.extend_from_slice(&packet.payload);
+                let to: Vec<u8> = self.near(peer).into_iter().filter(|&w| w != peer).collect();
+                vec![Outgoing::reliable(
+                    Recipients::Many(to),
+                    EventCode::NetworkPlayerTransmittedPackage,
+                    payload,
+                )]
+            }
+            Some(EventCode::RequestSyncProjectileEvent) => {
+                match ProjectileSyncHeader::decode(&packet.payload) {
+                    Ok(h) if self.players.contains_key(&peer) => {
+                        let to = if h.broadcast {
+                            if h.include_sender {
+                                Recipients::All
+                            } else {
+                                Recipients::AllExcept(peer)
+                            }
+                        } else {
+                            Recipients::Many(
+                                self.near(peer)
+                                    .into_iter()
+                                    .filter(|&w| h.include_sender || w != peer)
+                                    .collect(),
+                            )
+                        };
+                        vec![Outgoing::reliable(
+                            to,
+                            EventCode::SyncProjectileEvent,
+                            packet.payload.clone(),
+                        )]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            Some(EventCode::AdminCommand) => match decode_admin_command(&packet.payload) {
+                Ok(cmd)
+                    if cmd == ADMIN_START_GAME
+                        && self.players.get(&peer).is_some_and(|p| p.is_admin) =>
+                {
+                    self.force_start()
+                }
+                _ => Vec::new(),
+            },
             Some(EventCode::RequestSeat) => match SeatRequest::decode(&packet.payload) {
                 Ok(req) => self.seat(peer, req),
                 Err(_) => Vec::new(),
@@ -430,6 +533,12 @@ impl Room {
                 attachments: Vec::new(),
                 weapon_type: NO_WEAPON,
                 seat: None,
+                is_admin: self
+                    .settings
+                    .admins
+                    .iter()
+                    .any(|a| a == "*" || a.eq_ignore_ascii_case(&name)),
+                last_parrot: f32::MIN,
             },
         );
 
@@ -480,7 +589,12 @@ impl Room {
         player.in_world = true;
         player.position = spawn.position;
         player.rotation = [0.0, spawn.rotation];
-        let (index, group, name) = (player.index, player.group, player.name.clone());
+        let (index, group, name, is_admin) = (
+            player.index,
+            player.group,
+            player.name.clone(),
+            player.is_admin,
+        );
 
         let players = self
             .players
@@ -489,9 +603,9 @@ impl Room {
                 player_index: p.index,
                 group_index: p.group,
                 player_name: p.name.clone(),
-                weapon_type: NO_WEAPON,
+                weapon_type: p.weapon_type,
                 gear: p.gear.clone(),
-                is_admin: false,
+                is_admin: p.is_admin,
                 colour: p.colour,
             })
             .collect();
@@ -500,7 +614,7 @@ impl Room {
             player_index: index,
             group_index: group,
             player_name: name,
-            is_admin: false,
+            is_admin,
             position: spawn.position,
             rotation: spawn.rotation,
             is_dead: false,
@@ -720,6 +834,232 @@ impl Room {
             ));
         }
         out
+    }
+
+    /// Who hears what `peer` does: everyone in the lobby; during the match, players watching their
+    /// chunk plus their team.
+    fn near(&self, peer: u8) -> Vec<u8> {
+        let Some(p) = self.players.get(&peer) else {
+            return Vec::new();
+        };
+        if self.state != game_state::STARTED || p.area.is_empty() {
+            return self.player_ids();
+        }
+        let mut to = self.watchers(p.chunk);
+        to.extend(
+            self.players
+                .values()
+                .filter(|m| m.group == p.group)
+                .map(|m| m.index),
+        );
+        to.sort_unstable();
+        to.dedup();
+        to
+    }
+
+    /// Players standing in the same chunk as `peer` (chat and catchphrases are local).
+    fn same_chunk(&self, peer: u8) -> Vec<u8> {
+        let Some(p) = self.players.get(&peer) else {
+            return Vec::new();
+        };
+        let chunk = chunk_of(p.position);
+        self.players
+            .values()
+            .filter(|o| chunk_of(o.position) == chunk)
+            .map(|o| o.index)
+            .collect()
+    }
+
+    /// Start the countdown now (admin "Start Game" or `/start`).
+    fn force_start(&mut self) -> Vec<Outgoing> {
+        if self.state != game_state::WAITING_FOR_PLAYERS || self.players.is_empty() {
+            return Vec::new();
+        }
+        self.state = game_state::COUNT_DOWN;
+        self.countdown_left = self.settings.countdown;
+        vec![Self::state_changed(GameStateChanged::CountDown {
+            seconds: self.countdown_left,
+        })]
+    }
+
+    /// `ChatMessage`: relayed to players in the same chunk; admins' `/commands` run instead.
+    fn chat(&mut self, peer: u8, msg: ChatMessage, packet: &Packet) -> Vec<Outgoing> {
+        let is_admin = self.players.get(&peer).is_some_and(|p| p.is_admin);
+        if let Some(command) = msg.text.strip_prefix('/').filter(|_| is_admin) {
+            return self.run_command(peer, command);
+        }
+        vec![Outgoing::reliable(
+            Recipients::Many(self.same_chunk(peer)),
+            EventCode::ChatMessage,
+            packet.payload.clone(),
+        )]
+    }
+
+    /// Admin chat commands (a native replacement for the Citruslib ones people know).
+    fn run_command(&mut self, peer: u8, command: &str) -> Vec<Outgoing> {
+        let mut words = command.split_whitespace();
+        let reply = |text: String| {
+            Outgoing::reliable(
+                Recipients::One(peer),
+                EventCode::ChatMessage,
+                ChatMessage {
+                    player_index: peer,
+                    text: format!("[tabg] {text}"),
+                }
+                .encode(),
+            )
+        };
+        match words.next().unwrap_or("") {
+            "start" => {
+                let mut out = self.force_start();
+                out.push(reply(if out.is_empty() {
+                    "can only start from the lobby".into()
+                } else {
+                    "starting".into()
+                }));
+                out
+            }
+            "give" => {
+                let (Some(item), qty) = (
+                    words.next().and_then(|w| w.parse::<i32>().ok()),
+                    words
+                        .next()
+                        .and_then(|w| w.parse::<i32>().ok())
+                        .unwrap_or(1),
+                ) else {
+                    return vec![reply("usage: /give <item id> [quantity]".into())];
+                };
+                let at = self.players[&peer].position;
+                let loot = self.loot.add(item, qty.clamp(1, 999), at);
+                let mut to = self.near(peer);
+                if !to.contains(&peer) {
+                    to.push(peer);
+                }
+                vec![
+                    Outgoing::reliable(
+                        Recipients::Many(to),
+                        EventCode::ItemDrop,
+                        encode_item_drop(&loot),
+                    ),
+                    reply(format!("gave {qty} × item {item}")),
+                ]
+            }
+            "heal" => {
+                let p = self.players.get_mut(&peer).expect("sender exists");
+                p.health = 100.0;
+                vec![
+                    Outgoing::reliable(
+                        Recipients::Many(self.near(peer)),
+                        EventCode::PlayerHealthStateChanged,
+                        encode_player_health(peer, 100.0),
+                    ),
+                    reply("healed".into()),
+                ]
+            }
+            "kick" => {
+                let name = words.collect::<Vec<_>>().join(" ");
+                match self
+                    .players
+                    .values()
+                    .find(|p| p.name.eq_ignore_ascii_case(&name))
+                    .map(|p| p.index)
+                {
+                    Some(target) => {
+                        self.to_disconnect.push(target);
+                        vec![reply(format!("kicked {name}"))]
+                    }
+                    None => vec![reply(format!("no player named {name:?}"))],
+                }
+            }
+            other => vec![reply(format!(
+                "unknown command /{other}; try /start, /give, /heal, /kick"
+            ))],
+        }
+    }
+
+    /// `ThrowChatMessage`: the parrot speaks at the player's position (at most every 0.5 s).
+    fn parrot(&mut self, peer: u8, packet: &Packet) -> Vec<Outgoing> {
+        let now = self.last_now.unwrap_or(0.0);
+        let Some(p) = self.players.get_mut(&peer) else {
+            return Vec::new();
+        };
+        if now - p.last_parrot < 0.5 || packet.payload.is_empty() {
+            return Vec::new();
+        }
+        p.last_parrot = now;
+        let payload = encode_throw_chat(peer, p.position, p.rotation, &packet.payload[1..]);
+        vec![Outgoing::reliable(
+            Recipients::Many(self.near(peer)),
+            EventCode::ThrowChatMessage,
+            payload,
+        )]
+    }
+
+    /// `RequestHealing`: a bandage or med kit adds its healing amount.
+    fn heal(&mut self, peer: u8, item_id: i32) -> Vec<Outgoing> {
+        let Some(&amount) = self.settings.heal_amounts.get(&item_id) else {
+            return Vec::new();
+        };
+        let Some(p) = self.players.get_mut(&peer).filter(|p| p.alive && !p.downed) else {
+            return Vec::new();
+        };
+        p.health += amount;
+        let health = p.health;
+        vec![Outgoing::reliable(
+            Recipients::Many(self.near(peer)),
+            EventCode::PlayerHealed,
+            encode_player_health(peer, health),
+        )]
+    }
+
+    /// `RequestHealthState`: the client reports a higher health (only increases are accepted).
+    fn health_state(&mut self, peer: u8, health: f32) -> Vec<Outgoing> {
+        let Some(p) = self.players.get_mut(&peer).filter(|p| p.alive) else {
+            return Vec::new();
+        };
+        if !health.is_finite() || health <= p.health {
+            return Vec::new();
+        }
+        p.health = health;
+        vec![Outgoing::reliable(
+            Recipients::Many(self.near(peer)),
+            EventCode::PlayerHealthStateChanged,
+            encode_player_health(peer, health),
+        )]
+    }
+
+    /// `RequestItemThrow`: thrown items land as loot, except grenades.
+    fn throw(&mut self, peer: u8, req: ThrowRequest) -> Vec<Outgoing> {
+        if !self.players.get(&peer).is_some_and(|p| p.alive)
+            || req.quantity <= 0
+            || !req
+                .position
+                .iter()
+                .chain(&req.direction)
+                .all(|v| v.is_finite())
+        {
+            return Vec::new();
+        }
+        let network_id = if self.settings.grenades.contains(&req.item_id) {
+            self.loot.reserve_id()
+        } else {
+            self.loot
+                .add(req.item_id, req.quantity, req.position)
+                .network_id
+        };
+        let payload = encode_item_thrown(
+            peer,
+            network_id,
+            req.item_id,
+            req.quantity,
+            req.position,
+            req.direction,
+        );
+        vec![Outgoing::reliable(
+            Recipients::Many(self.near(peer)),
+            EventCode::ItemThrown,
+            payload,
+        )]
     }
 
     /// `RequestSeat`: get into or out of a car seat (official `RequestSeatCommand`).
@@ -2391,5 +2731,140 @@ mod tests {
         let raw = &events(&out, EventCode::ChunkEntry)[0].packet.payload;
         assert_eq!(u16::from_le_bytes([raw[4], raw[5]]), 1, "one car in view");
         assert_eq!(room.cars_in(&[chunk_of(room.cars[&car].position)]).len(), 1);
+    }
+
+    fn chat(room: &mut Room, peer: u8, text: &str) -> Vec<Outgoing> {
+        let msg = tabg_protocol::actions::ChatMessage {
+            player_index: peer,
+            text: text.into(),
+        };
+        room.handle(peer, &Packet::new(EventCode::ChatMessage, msg.encode()))
+    }
+
+    #[test]
+    fn healing_items_and_health_states() {
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        room.settings.heal_amounts.insert(131, 15.0);
+        hit(&mut room, 1, 0, 50.0);
+        let req = tabg_protocol::actions::HealRequest {
+            player_index: 0,
+            item_id: 131,
+        };
+        let out = room.handle(0, &Packet::new(EventCode::RequestHealing, req.encode()));
+        assert_eq!(
+            out[0].packet.payload,
+            tabg_protocol::actions::encode_player_health(0, 65.0)
+        );
+        let unknown = tabg_protocol::actions::HealRequest {
+            item_id: 999,
+            ..req
+        };
+        assert!(
+            room.handle(0, &Packet::new(EventCode::RequestHealing, unknown.encode()))
+                .is_empty()
+        );
+        let mut lower = vec![0];
+        lower.extend(10.0f32.to_le_bytes());
+        assert!(
+            room.handle(0, &Packet::new(EventCode::RequestHealthState, lower))
+                .is_empty(),
+            "only increases"
+        );
+        let mut higher = vec![0];
+        higher.extend(90.0f32.to_le_bytes());
+        assert_eq!(
+            room.handle(0, &Packet::new(EventCode::RequestHealthState, higher))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn thrown_items_become_loot_but_grenades_do_not() {
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        room.settings.grenades.insert(50);
+        let before = room.loot().len();
+        let throw = |room: &mut Room, item| {
+            let t = tabg_protocol::actions::ThrowRequest {
+                player_index: 0,
+                item_id: item,
+                quantity: 1,
+                position: [1.0; 3],
+                direction: [0.0, 1.0, 0.0],
+            };
+            room.handle(0, &Packet::new(EventCode::RequestItemThrow, t.encode()))
+        };
+        assert_eq!(
+            throw(&mut room, 50)[0].packet.event(),
+            Some(EventCode::ItemThrown)
+        );
+        assert_eq!(room.loot().len(), before);
+        throw(&mut room, 6);
+        assert_eq!(room.loot().len(), before + 1);
+    }
+
+    #[test]
+    fn chat_is_local_and_admins_get_commands() {
+        let mut room = Room::new(RoomSettings {
+            admins: vec!["boss".into()],
+            ..lobby()
+        });
+        join(&mut room, 0, "boss");
+        enter(&mut room, 0);
+        join(&mut room, 1, "guest");
+        enter(&mut room, 1);
+        // Plain chat is relayed; a guest's "/start" is just text.
+        assert_eq!(
+            chat(&mut room, 1, "/start")[0].packet.event(),
+            Some(EventCode::ChatMessage)
+        );
+        assert_eq!(room.state(), game_state::WAITING_FOR_PLAYERS);
+        // The admin's runs.
+        let out = chat(&mut room, 0, "/start");
+        assert!(events(&out, EventCode::GameStateChanged).len() == 1);
+        assert_eq!(room.state(), game_state::COUNT_DOWN);
+        let out = chat(&mut room, 0, "/give 6 30");
+        assert_eq!(events(&out, EventCode::ItemDrop).len(), 1);
+        assert!(
+            chat(&mut room, 0, "/kick guest")
+                .iter()
+                .any(|o| o.to == Recipients::One(0))
+        );
+        assert_eq!(room.take_disconnects(), [1]);
+    }
+
+    #[test]
+    fn admin_start_game_command_needs_an_admin() {
+        let mut room = Room::new(RoomSettings {
+            admins: vec!["boss".into()],
+            ..lobby()
+        });
+        join(&mut room, 0, "boss");
+        join(&mut room, 1, "guest");
+        let mut w = tabg_protocol::Writer::new();
+        w.string("Start Game");
+        let cmd = Packet::new(EventCode::AdminCommand, w.into_inner());
+        assert!(room.handle(1, &cmd).is_empty());
+        assert_eq!(room.handle(0, &cmd).len(), 1);
+        assert_eq!(room.state(), game_state::COUNT_DOWN);
+    }
+
+    #[test]
+    fn parrot_is_rate_limited_and_spectating_needs_a_dead_player() {
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        let say = Packet::new(EventCode::ThrowChatMessage, vec![0, 2, b'h', 0]);
+        assert_eq!(room.handle(0, &say).len(), 1);
+        assert!(room.handle(0, &say).is_empty(), "too soon");
+        assert!(
+            room.handle(0, &Packet::new(EventCode::SpectatorRequest, vec![1]))
+                .is_empty(),
+            "alive"
+        );
+        room.handle(0, &Packet::new(EventCode::PlayerDead, vec![0]));
+        let out = room.handle(0, &Packet::new(EventCode::SpectatorRequest, vec![1]));
+        assert_eq!(
+            (out[0].to.clone(), out[0].packet.payload.clone()),
+            (Recipients::One(0), vec![1])
+        );
     }
 }

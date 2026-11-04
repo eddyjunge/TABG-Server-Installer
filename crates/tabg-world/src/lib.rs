@@ -124,6 +124,12 @@ pub struct World {
     pub items: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub cars: Vec<Car>,
+    /// Item id (string key) → health restored by using it.
+    #[serde(default)]
+    pub heal_amounts: std::collections::BTreeMap<String, f32>,
+    /// Item ids that are grenades (thrown, not left as loot).
+    #[serde(default)]
+    pub grenades: Vec<i32>,
 }
 
 impl World {

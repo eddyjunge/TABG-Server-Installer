@@ -124,6 +124,8 @@ namespace Tabg.WorldDumper
             sb.Append("  ],\n  \"match_modifiers\": [\n");
             TABGLootPresetDatabase db = TABGLootPresetDatabase.Instance;
             var names = new System.Collections.Generic.SortedDictionary<int, string>();
+            var heals = new System.Collections.Generic.SortedDictionary<int, float>();
+            var grenades = new System.Collections.Generic.SortedSet<int>();
             bool first = true;
             for (int i = 0; db != null && i < 256; i++)
             {
@@ -147,6 +149,16 @@ namespace Tabg.WorldDumper
                         {
                             Pickup p = l.loot.GetComponent<Pickup>();
                             names[p.m_itemIndex] = string.IsNullOrEmpty(p.itemName) ? l.loot.name : p.itemName;
+                            HealingItem heal = l.loot.GetComponent<HealingItem>();
+                            if (heal != null)
+                            {
+                                heals[p.m_itemIndex] = heal.healingAmount;
+                            }
+
+                            if (p.weaponType == Pickup.WeaponType.Grenade)
+                            {
+                                grenades.Add(p.m_itemIndex);
+                            }
                             return "[" + p.m_itemIndex.ToString(CultureInfo.InvariantCulture) + ", " + l.quanitity.ToString(CultureInfo.InvariantCulture) + "]";
                         });
                     return "{\"spawn_rate\": " + F(d.spawnRate) + ", \"items\": [" + string.Join(", ", items) + "]}";
@@ -156,7 +168,11 @@ namespace Tabg.WorldDumper
 
             sb.Append("\n  ],\n  \"items\": {");
             sb.Append(string.Join(", ", names.Select(kv => "\"" + kv.Key.ToString(CultureInfo.InvariantCulture) + "\": " + Quote(kv.Value))));
-            sb.Append("}\n");
+            sb.Append("},\n  \"heal_amounts\": {");
+            sb.Append(string.Join(", ", heals.Select(kv => "\"" + kv.Key.ToString(CultureInfo.InvariantCulture) + "\": " + F(kv.Value))));
+            sb.Append("},\n  \"grenades\": [");
+            sb.Append(string.Join(", ", grenades.Select(g => g.ToString(CultureInfo.InvariantCulture))));
+            sb.Append("]\n");
         }
 
         private const float CarsWaitSeconds = 120f;

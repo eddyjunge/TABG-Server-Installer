@@ -44,6 +44,12 @@ pub struct RoomSettings {
     pub loot_keep: f32,
     /// Cars and where they stand at the start (from the map data).
     pub cars: Vec<CarSpawn>,
+    /// Health restored per healing item id (from the map data).
+    pub heal_amounts: std::collections::BTreeMap<i32, f32>,
+    /// Item ids that are grenades (thrown ones don't become loot).
+    pub grenades: std::collections::BTreeSet<i32>,
+    /// Player names (case-insensitive) with admin rights; `*` makes everyone an admin.
+    pub admins: Vec<String>,
     pub lives_per_team: i32,
     pub kills_to_win: u16,
     /// Movement updates per second (the official server uses 30).
@@ -75,6 +81,9 @@ impl Default for RoomSettings {
             loot: LootRules::default(),
             loot_keep: 0.1,
             cars: Vec::new(),
+            heal_amounts: Default::default(),
+            grenades: Default::default(),
+            admins: Vec::new(),
             lives_per_team: 256,
             kills_to_win: 20,
             tick_rate: 30,

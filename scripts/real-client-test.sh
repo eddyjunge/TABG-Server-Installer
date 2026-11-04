@@ -40,7 +40,7 @@ for _ in $(seq 1 60); do pgrep -x TotallyAccurate >/dev/null || break; sleep 1; 
 pgrep -x TotallyAccurate >/dev/null && { echo "TABG is still running; close it first"; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT"
 WORLD_ARGS=(); [[ -s "$WORLD" ]] && WORLD_ARGS=(--world "$WORLD")
-RUST_LOG=debug,tabg_server=debug ./target/release/tabg-server --bind 127.0.0.1 --port 7777 "${WORLD_ARGS[@]}" > "$OUT/server.log" 2>&1 &
+RUST_LOG=debug,tabg_server=debug ./target/release/tabg-server --bind 127.0.0.1 --port 7777 --admin "*" "${WORLD_ARGS[@]}" > "$OUT/server.log" 2>&1 &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null || true' EXIT
 
@@ -48,7 +48,7 @@ trap 'kill $SERVER 2>/dev/null || true' EXIT
   cd "$TEST"
   export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/823130"
   export STEAM_COMPAT_APP_ID=823130 SteamAppId=823130 SteamGameId=823130
-  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN=127.0.0.1:7777 TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}"
+  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN=127.0.0.1:7777 TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}"
   exec "$PROTON" run "$TEST/TotallyAccurateBattlegrounds.exe" > "$PWD/../client-proton.log" 2>&1
 ) &
 CLIENT=$!

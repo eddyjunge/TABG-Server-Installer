@@ -7,6 +7,7 @@
 //! Message layouts are implemented from protocol knowledge so that unmodified TABG clients can
 //! talk to our server. Field comments say which side sends a message.
 
+pub mod actions;
 pub mod codec;
 pub mod combat;
 pub mod event;

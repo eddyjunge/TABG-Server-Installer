@@ -138,6 +138,12 @@ impl LootWorld {
         item
     }
 
+    /// A network id for something that won't lie in the world (a thrown grenade).
+    pub fn reserve_id(&mut self) -> i32 {
+        self.next_id += 1;
+        self.next_id - 1
+    }
+
     pub fn get(&self, network_id: i32) -> Option<&LootItem> {
         self.items.get(&network_id)
     }
