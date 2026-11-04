@@ -63,6 +63,7 @@ fn page(app: &AppState, active: &str, title: &str, body: Markup) -> Markup {
         ("/loadout", "Loadout & Ring"),
         ("/presets", "Presets"),
         ("/backups", "Backups"),
+        ("/share", "Share"),
     ];
     html! {
         (DOCTYPE)
@@ -499,6 +500,47 @@ pub async fn backups(State(app): State<AppState>) -> Markup {
     )
 }
 
+pub async fn share(State(app): State<AppState>) -> Markup {
+    let c = apply::read_config(&app.paths).unwrap_or_default();
+    let current = app
+        .share
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|p| p.code.encode());
+    page(
+        &app,
+        "/share",
+        "Share",
+        html! {
+            h1 { "Share" }
+            div.card {
+                h2 style="margin-top:0" { "Friends with the plain game" }
+                p { "Nothing to install: they type the join code (Overview) into TABG's join box." }
+            }
+            form.card hx-post="/ui/mods" hx-target="#mods-result" {
+                h2 style="margin-top:0" { "Client mods" }
+                p.muted { "Optional extras friends need on their side. One per line: a catalog mod as " code { "id@version" } ", or a path to a DLL of your own (served to friends from this PC)." }
+                textarea name="mods" rows="5" { (c.mods.client.join("\n")) }
+                div.row style="margin-top:10px" { button { "Save mods" } span id="mods-result" {} }
+            }
+            div.card {
+                h2 style="margin-top:0" { "Share code" }
+                p.muted { "Friends run " code { "tabg join <share code>" } ": it makes a modded copy of their TABG with exactly these mods (hash-checked) and tells them the join code." }
+                div id="share-code" { @if let Some(code) = current { (share_box(&code)) } }
+                button hx-post="/ui/share" hx-target="#share-code" { "Make share code" }
+            }
+        },
+    )
+}
+
+fn share_box(code: &str) -> Markup {
+    html! {
+        textarea readonly rows="3" onclick="this.select()" { (code) }
+        p.muted { "Send it with: " code { "tabg join " (code) } }
+    }
+}
+
 fn applied_message(a: &Applied) -> &'static str {
     match a {
         Applied::Saved => "Saved.",
@@ -755,6 +797,22 @@ pub async fn action(
                 Err(e) => answer(html! { span.bad { (e) } }),
             }
         }
+        "mods" => {
+            let mut next = current;
+            next.mods.client = get("mods")
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect();
+            answer(apply_answer(
+                run_apply(&app, next, "client mods".into()).await,
+            ))
+        }
+        "share" => match crate::api::make_share(&app).await {
+            Ok(v) => answer(share_box(v["code"].as_str().unwrap_or(""))),
+            Err(e) => answer(html! { span.bad { (e) } }),
+        },
         "backup_restore" => match backup::restore(&app.paths, &get("id")) {
             Ok(()) => {
                 let restored = apply::read_config(&app.paths).unwrap_or_default();

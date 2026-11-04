@@ -77,6 +77,8 @@ pub fn run(paths: &Paths, port: u16, browser: bool, autostart: bool) {
         token: token.clone(),
         port,
         setup_busy: Mutex::new(false),
+        share: Mutex::new(None),
+        sync_port: Mutex::new(None),
     });
     let host_file = HostFile {
         port,

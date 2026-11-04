@@ -20,6 +20,8 @@ fn app() -> (Arc<App>, tempfile_dir::Dir) {
             token: "secret".into(),
             port: 7780,
             setup_busy: Mutex::new(false),
+            share: Mutex::new(None),
+            sync_port: Mutex::new(None),
         }),
         dir,
     )

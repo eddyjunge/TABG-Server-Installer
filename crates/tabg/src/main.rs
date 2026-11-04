@@ -98,6 +98,18 @@ enum Cmd {
         #[arg(short, long)]
         follow: bool,
     },
+    /// Make a share code for friends (join code + the client mods they need).
+    Share,
+    /// Get ready to play on a friend's server: make a modded TABG copy for their share code.
+    Join {
+        /// The share code (TABG1-…). A plain join code needs nothing: type it in TABG.
+        code: String,
+        /// Start the modded copy afterwards.
+        #[arg(long)]
+        launch: bool,
+    },
+    /// Start the modded TABG copy made by `tabg join`.
+    Launch,
     /// Run the game server in this process (used by the host).
     #[command(hide = true)]
     Serve,
@@ -398,6 +410,56 @@ fn main() {
                 }))
             }
         },
+        Cmd::Share => {
+            let v = Api::running(&paths).post("share", json!({}));
+            println!("{}", v["code"].as_str().unwrap_or(""));
+            println!();
+            match v["join"].as_str() {
+                Some(j) => println!("join code inside: {j}"),
+                None => println!("(no join code inside: start the server first for one)"),
+            }
+            let mods = v["mods"].as_array().map_or(0, Vec::len)
+                + v["files"].as_array().map_or(0, Vec::len);
+            if mods == 0 {
+                println!("no client mods: friends can just type the join code into TABG");
+            } else {
+                println!("friends run: tabg join <that code>");
+            }
+        }
+        Cmd::Join { code, launch } => {
+            if !code.trim().starts_with("TABG1-") {
+                println!(
+                    "{} looks like a plain join code: open TABG and type it into the join code box. \
+                     Nothing to install.",
+                    code.trim()
+                );
+                return;
+            }
+            match tabg_host::share::join(&paths, &code, &mut |m| println!("{m}")) {
+                Ok(j) => {
+                    println!(
+                        "ready: {} mod file(s) in {}",
+                        j.installed.len(),
+                        j.copy.display()
+                    );
+                    match &j.join {
+                        Some(c) => println!("in the game, join with: {c}"),
+                        None => println!("ask your friend for the join code"),
+                    }
+                    if launch {
+                        tabg_host::share::launch(&paths).unwrap_or_else(|e| die(e));
+                        println!("starting TABG (keep Steam running)");
+                    } else {
+                        println!("start it with: tabg launch");
+                    }
+                }
+                Err(e) => die(e),
+            }
+        }
+        Cmd::Launch => {
+            tabg_host::share::launch(&paths).unwrap_or_else(|e| die(e));
+            println!("starting the modded TABG copy (keep Steam running)");
+        }
         Cmd::Logs { n, follow } => {
             let api = Api::running(&paths);
             let mut last = print_log(&api.get(&format!("logs?n={n}")), 0);

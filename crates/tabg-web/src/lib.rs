@@ -27,6 +27,10 @@ pub struct App {
     pub port: u16,
     /// A setup (map export) is running.
     pub setup_busy: Mutex<bool>,
+    /// The current share (what the sync endpoint may serve).
+    pub share: Mutex<Option<tabg_host::share::Pack>>,
+    /// Port of the sync endpoint once it runs.
+    pub sync_port: Mutex<Option<u16>>,
 }
 
 pub type AppState = Arc<App>;
@@ -125,6 +129,53 @@ async fn events(State(app): State<AppState>) -> impl IntoResponse {
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+/// The friends-facing sync endpoint: `GET /f/<sha256>` for files in the current share only.
+/// Read-only, no listing, no auth (the hash is the capability).
+pub fn sync_router(app: AppState) -> Router {
+    async fn file(
+        State(app): State<AppState>,
+        axum::extract::Path(sha): axum::extract::Path<String>,
+    ) -> Response {
+        let path = app
+            .share
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|p| p.file(&sha).map(std::path::Path::to_owned));
+        match path.and_then(|p| std::fs::read(p).ok()) {
+            Some(data) => {
+                ([(header::CONTENT_TYPE, "application/octet-stream")], data).into_response()
+            }
+            None => axum::http::StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+    Router::new().route("/f/{sha}", get(file)).with_state(app)
+}
+
+/// Start the sync endpoint (0.0.0.0:7781 or the next free port) if it isn't running.
+pub async fn ensure_sync(app: &AppState) -> std::io::Result<u16> {
+    if let Some(p) = *app.sync_port.lock().unwrap_or_else(|e| e.into_inner()) {
+        return Ok(p);
+    }
+    let mut last = None;
+    for port in 7781..7791 {
+        match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(listener) => {
+                *app.sync_port.lock().unwrap_or_else(|e| e.into_inner()) = Some(port);
+                let router = sync_router(Arc::clone(app));
+                tokio::spawn(async move {
+                    let _ = axum::serve(listener, router).await;
+                });
+                app.supervisor
+                    .host_log(format!("sharing mod files on TCP port {port} (read-only)"));
+                return Ok(port);
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free port")))
+}
+
 pub fn router(app: AppState) -> Router {
     Router::new()
         .route("/", get(pages::overview))
@@ -134,6 +185,7 @@ pub fn router(app: AppState) -> Router {
         .route("/loadout", get(pages::loadout))
         .route("/presets", get(pages::presets))
         .route("/backups", get(pages::backups))
+        .route("/share", get(pages::share))
         .route("/events", get(events))
         .route("/assets/htmx.js", get(|| script(HTMX)))
         .route("/assets/htmx-sse.js", get(|| script(HTMX_SSE)))

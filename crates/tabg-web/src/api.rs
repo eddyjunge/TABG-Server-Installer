@@ -52,6 +52,7 @@ pub fn routes() -> Router<AppState> {
         .route("/players/admin", post(set_admin))
         .route("/players/ban", post(set_ban))
         .route("/setup", post(setup))
+        .route("/share", post(share))
 }
 
 pub fn apply_result(r: Result<apply::Applied, ApplyError>) -> ApiResult {
@@ -309,4 +310,71 @@ struct SetupBody {
 async fn setup(State(app): State<AppState>, Json(body): Json<SetupBody>) -> ApiResult {
     app.start_setup(body.force).map_err(bad)?;
     Ok(Json(json!({ "started": true })))
+}
+
+/// Our public IPv4 (for the sync address in share codes).
+fn public_ip() -> Option<String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .build()
+        .into();
+    let ip = agent
+        .get("https://ipv4.icanhazip.com")
+        .call()
+        .ok()?
+        .body_mut()
+        .read_to_string()
+        .ok()?;
+    let ip = ip.trim().to_owned();
+    ip.parse::<std::net::Ipv4Addr>().ok().map(|_| ip)
+}
+
+/// Make a share code for the current client mods (and start the sync endpoint if the host has
+/// files of its own to hand out).
+pub async fn make_share(app: &AppState) -> Result<Value, String> {
+    let config = apply::read_config(&app.paths)?;
+    let status = app.supervisor.status();
+    let join = match status.join_code.clone() {
+        Some(code) => Some(code),
+        None if config.network.mode == tabg_host::config::NetMode::Direct
+            && status.direct.is_some() =>
+        {
+            let port = config.network.port;
+            blocking(public_ip).await.map(|ip| format!("{ip}:{port}"))
+        }
+        None => None,
+    };
+    let has_files = config
+        .mods
+        .client
+        .iter()
+        .any(|m| m.to_ascii_lowercase().ends_with(".dll"));
+    let sync = if has_files {
+        let port = crate::ensure_sync(app).await.map_err(|e| e.to_string())?;
+        // TABG_SHARE_HOST: the address friends use for this PC (LAN parties, tests).
+        let ip = match std::env::var("TABG_SHARE_HOST") {
+            Ok(h) if !h.is_empty() => h,
+            _ => blocking(public_ip)
+                .await
+                .ok_or("couldn't find our public IP for the share")?,
+        };
+        Some(format!("http://{ip}:{port}"))
+    } else {
+        None
+    };
+    let paths = app.paths.clone();
+    let pack = blocking(move || tabg_host::share::build(&paths, &config, join, sync)).await?;
+    let out = json!({
+        "code": pack.code.encode(),
+        "join": pack.code.join,
+        "mods": pack.code.mods,
+        "files": pack.code.files,
+        "host": pack.code.host,
+    });
+    *app.share.lock().unwrap_or_else(|e| e.into_inner()) = Some(pack);
+    Ok(out)
+}
+
+async fn share(State(app): State<AppState>) -> ApiResult {
+    make_share(&app).await.map(Json).map_err(bad)
 }

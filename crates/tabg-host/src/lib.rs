@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod paths;
 pub mod presets;
 pub mod setup;
+pub mod share;
 pub mod steam;
 pub mod store;
 pub mod supervisor;

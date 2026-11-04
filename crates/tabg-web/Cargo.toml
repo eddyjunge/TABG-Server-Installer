@@ -19,6 +19,7 @@ tabg-world = { path = "../tabg-world" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 tracing = "0.1.44"
+ureq = "3.5.1"
 
 [lints]
 workspace = true

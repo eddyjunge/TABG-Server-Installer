@@ -147,6 +147,8 @@ pub fn with_host_or_local(paths: &Paths, f: impl FnOnce(&Api) -> Value) -> Value
         token: token.clone(),
         port,
         setup_busy: Mutex::new(false),
+        share: Mutex::new(None),
+        sync_port: Mutex::new(None),
     });
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = runtime.spawn(tabg_web::serve(app, listener, async {
