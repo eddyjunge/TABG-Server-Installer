@@ -90,6 +90,38 @@ fn main() {
         }
         tracing::info!(count = lobby.len(), scenes = ?world.scenes, "loaded lobby spawn points");
         settings.spawn_points = lobby;
+        settings.loot = tabg_game::loot::LootRules {
+            spots: world
+                .loot_spots
+                .iter()
+                .filter(|s| s.has_preset)
+                .map(|s| tabg_game::loot::Spot {
+                    position: s.position,
+                    force: s.force_spawn,
+                })
+                .collect(),
+            modifiers: world
+                .match_modifiers
+                .iter()
+                .map(|m| tabg_game::loot::Modifier {
+                    index: m.index,
+                    rarity: m.rarity,
+                    drops: m
+                        .drops
+                        .iter()
+                        .map(|d| tabg_game::loot::Drop {
+                            weight: d.spawn_rate,
+                            items: d.items.iter().map(|&[i, q]| (i, q)).collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        };
+        tracing::info!(
+            spots = settings.loot.spots.len(),
+            modifiers = settings.loot.modifiers.len(),
+            "loaded loot tables"
+        );
         if let Some(ring) = world.ring {
             settings.ring.ring_times = ring.ring_times;
             settings.ring.base_time = ring.base_time_to_travel;

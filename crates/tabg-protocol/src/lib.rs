@@ -10,6 +10,7 @@
 pub mod codec;
 pub mod combat;
 pub mod event;
+pub mod loot;
 pub mod match_flow;
 pub mod messages;
 

@@ -41,7 +41,7 @@ for need in "$SRC/BepInEx/core/BepInEx.Preloader.dll" "$SRC/doorstop_libs/libdoo
 done
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 [ -d "$HOME/.dotnet" ] && export PATH="$HOME/.dotnet:$PATH"
-dotnet build -v q -c Release mods/src/WorldDumper >/dev/null
+dotnet build -v q -c Release mods/src/WorldDumper >/dev/null || { dotnet build -c Release mods/src/WorldDumper | grep -E " error " | sort -u; exit 1; }
 
 W=target/world-dump/server
 rm -rf "$W"; mkdir -p "$W/BepInEx/plugins" "$(dirname "$OUT")"

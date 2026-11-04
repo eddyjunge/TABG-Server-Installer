@@ -15,6 +15,13 @@ use tabg_protocol::messages::{
 };
 use tabg_protocol::{EventCode, Packet};
 
+use tabg_protocol::loot::{
+    ChunkEntry, ChunkExit, ChunkPlayer, DropRequest, EQUIPMENT_LEN, NO_EQUIPMENT, PickupRequest,
+    area_around, chunk_of, encode_item_drop, encode_pickup_accepted, encode_player_entered_chunk,
+    encode_player_left_chunk,
+};
+
+use crate::loot::LootWorld;
 use crate::plane::{self, Plane};
 
 /// "No player" in TABG's byte player fields.
@@ -31,6 +38,7 @@ pub const RESTART_AFTER_END: f32 = 15.0;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Recipients {
     One(u8),
+    Many(Vec<u8>),
     All,
     AllExcept(u8),
 }
@@ -80,6 +88,13 @@ struct Player {
     /// 255 = nobody.
     last_attacker: u8,
     kills: u16,
+    /// Chunk the player is in, and the 3×3 chunks they can see (empty until their first chunk
+    /// entry after jumping).
+    chunk: (i8, i8),
+    area: Vec<(i8, i8)>,
+    equipment: [i16; EQUIPMENT_LEN],
+    attachments: Vec<i16>,
+    weapon_type: i32,
 }
 
 /// One TABG match.
@@ -101,6 +116,9 @@ pub struct Room {
     ended_at: Option<f32>,
     /// Peers the transport should disconnect (taken by [`Room::take_disconnects`]).
     to_disconnect: Vec<u8>,
+    loot: LootWorld,
+    /// Match modifier of the current match ("Normal game", …).
+    modifier: u8,
 }
 
 impl Room {
@@ -121,7 +139,14 @@ impl Room {
             ring,
             ended_at: None,
             to_disconnect: Vec::new(),
+            loot: LootWorld::default(),
+            modifier: 0,
         }
+    }
+
+    /// Loot currently lying in the world.
+    pub fn loot(&self) -> &LootWorld {
+        &self.loot
     }
 
     /// Current `GameState` byte.
@@ -208,11 +233,22 @@ impl Room {
                 event @ (EventCode::WeaponChange | EventCode::GearChange | EventCode::PlayerEffect),
             ) => {
                 let relayed = match event {
-                    EventCode::WeaponChange => EventCode::WeaponChanged,
+                    EventCode::WeaponChange => {
+                        self.track_equipment(peer, &packet.payload);
+                        EventCode::WeaponChanged
+                    }
                     other => other,
                 };
                 self.relay_from(peer, packet, relayed, Recipients::All)
             }
+            Some(EventCode::RequestWeaponPickUp) => match PickupRequest::decode(&packet.payload) {
+                Ok(req) => self.pickup(peer, req),
+                Err(_) => Vec::new(),
+            },
+            Some(EventCode::RequestItemDrop) => match DropRequest::decode(&packet.payload) {
+                Ok(req) => self.item_drop(peer, req),
+                Err(_) => Vec::new(),
+            },
             Some(EventCode::PlayerState) => {
                 self.relay_from(peer, packet, EventCode::PlayerStateChanged, Recipients::All)
             }
@@ -237,12 +273,10 @@ impl Room {
                 }
                 _ => Vec::new(),
             },
-            Some(EventCode::PlayerUpdate) => {
-                if let Ok(up) = ClientPlayerUpdate::decode(&packet.payload) {
-                    self.player_update(peer, up);
-                }
-                Vec::new()
-            }
+            Some(EventCode::PlayerUpdate) => match ClientPlayerUpdate::decode(&packet.payload) {
+                Ok(up) => self.player_update(peer, up),
+                Err(_) => Vec::new(),
+            },
             // TABGPing is echoed back unchanged as PingRecieved.
             Some(EventCode::TABGPing) => {
                 vec![Outgoing::reliable(
@@ -323,6 +357,11 @@ impl Room {
                 down_time: 0.0,
                 last_attacker: NOBODY,
                 kills: 0,
+                chunk: (0, 0),
+                area: Vec::new(),
+                equipment: NO_EQUIPMENT,
+                attachments: Vec::new(),
+                weapon_type: NO_WEAPON,
             },
         );
 
@@ -445,10 +484,11 @@ impl Room {
         p
     }
 
-    fn player_update(&mut self, peer: u8, up: ClientPlayerUpdate) {
+    fn player_update(&mut self, peer: u8, up: ClientPlayerUpdate) -> Vec<Outgoing> {
         // Clients name themselves in the packet; only trust the transport's peer id.
+        let in_match = self.state == game_state::STARTED;
         let Some(p) = self.players.get_mut(&peer) else {
-            return;
+            return Vec::new();
         };
         if !p.in_world
             || up.player_index != peer
@@ -458,7 +498,7 @@ impl Room {
                 .chain(&up.rotation)
                 .all(|v| v.is_finite())
         {
-            return;
+            return Vec::new();
         }
         p.position = up.position;
         p.rotation = up.rotation;
@@ -466,6 +506,221 @@ impl Room {
         p.direction = up.direction;
         p.movement = up.movement;
         p.dirty = true;
+        let new_chunk = chunk_of(up.position);
+        if in_match && p.dropped && !p.area.is_empty() && new_chunk != p.chunk {
+            return self.chunk_changed(peer, new_chunk);
+        }
+        Vec::new()
+    }
+
+    /// The player record other clients get in chunk messages.
+    fn chunk_player(p: &Player) -> ChunkPlayer {
+        ChunkPlayer {
+            player_index: p.index,
+            state: 0,
+            weapon_type: p.weapon_type,
+            health: p.health,
+            downed: p.downed,
+            skydiving: !p.landed,
+            gear: p.gear.clone(),
+            equipment: p.equipment,
+            attachments: p.attachments.clone(),
+        }
+    }
+
+    /// Players (who jumped) that currently see `chunk`.
+    fn watchers(&self, chunk: (i8, i8)) -> Vec<u8> {
+        self.players
+            .values()
+            .filter(|w| w.dropped && w.area.contains(&chunk))
+            .map(|w| w.index)
+            .collect()
+    }
+
+    /// Living players who jumped and stand in one of `chunks`, except `skip`.
+    fn players_in(&self, chunks: &[(i8, i8)], skip: u8) -> impl Iterator<Item = &Player> {
+        self.players
+            .values()
+            .filter(move |o| o.index != skip && o.dropped && o.alive && chunks.contains(&o.chunk))
+    }
+
+    /// After jumping: send the player everything around them and announce them to watchers
+    /// (official `ForceChunkEntry`).
+    fn force_chunk_entry(&mut self, peer: u8) -> Vec<Outgoing> {
+        let Some(p) = self.players.get_mut(&peer) else {
+            return Vec::new();
+        };
+        p.chunk = chunk_of(p.position);
+        p.area = area_around(p.chunk).to_vec();
+        let (chunk, area) = (p.chunk, p.area.clone());
+        let entry = ChunkEntry {
+            player_index: peer,
+            players: self
+                .players_in(&area, peer)
+                .map(Self::chunk_player)
+                .collect(),
+            loot: self.loot.in_chunks(&area),
+        };
+        let mut out = vec![Outgoing::reliable(
+            Recipients::One(peer),
+            EventCode::ChunkEntry,
+            entry.encode(),
+        )];
+        out.extend(self.announce_in_chunk(peer, chunk));
+        out
+    }
+
+    /// `PlayerEnteredChunk` for `peer` to everyone else watching `chunk`.
+    fn announce_in_chunk(&self, peer: u8, chunk: (i8, i8)) -> Vec<Outgoing> {
+        let watchers: Vec<u8> = self
+            .watchers(chunk)
+            .into_iter()
+            .filter(|&w| w != peer)
+            .collect();
+        match self.players.get(&peer) {
+            Some(p) if p.alive && !watchers.is_empty() => vec![Outgoing::reliable(
+                Recipients::Many(watchers),
+                EventCode::PlayerEnteredChunk,
+                encode_player_entered_chunk(&Self::chunk_player(p), [-1, -1, -1]),
+            )],
+            _ => Vec::new(),
+        }
+    }
+
+    /// The player crossed into `new_chunk`: send what came into and went out of view, and tell
+    /// the watchers (official `PlayerChangedChunk`).
+    fn chunk_changed(&mut self, peer: u8, new_chunk: (i8, i8)) -> Vec<Outgoing> {
+        let Some(p) = self.players.get_mut(&peer) else {
+            return Vec::new();
+        };
+        let (old_chunk, old_area) = (p.chunk, std::mem::take(&mut p.area));
+        let new_area = area_around(new_chunk).to_vec();
+        p.chunk = new_chunk;
+        p.area = new_area.clone();
+        let appeared: Vec<_> = new_area
+            .iter()
+            .copied()
+            .filter(|c| !old_area.contains(c))
+            .collect();
+        let vanished: Vec<_> = old_area
+            .iter()
+            .copied()
+            .filter(|c| !new_area.contains(c))
+            .collect();
+
+        let entry = ChunkEntry {
+            player_index: peer,
+            players: self
+                .players_in(&appeared, peer)
+                .map(Self::chunk_player)
+                .collect(),
+            loot: self.loot.in_chunks(&appeared),
+        };
+        let exit = ChunkExit {
+            player_index: peer,
+            players: self.players_in(&vanished, peer).map(|o| o.index).collect(),
+            loot: self.loot.ids_in_chunks(&vanished),
+        };
+        let mut out = vec![
+            Outgoing::reliable(Recipients::One(peer), EventCode::ChunkEntry, entry.encode()),
+            Outgoing::reliable(Recipients::One(peer), EventCode::ChunkExit, exit.encode()),
+        ];
+        out.extend(self.announce_in_chunk(peer, new_chunk));
+        let old_watchers: Vec<u8> = self
+            .watchers(old_chunk)
+            .into_iter()
+            .filter(|&w| w != peer)
+            .collect();
+        let lost_sight: Vec<u8> = old_watchers
+            .iter()
+            .copied()
+            .filter(|w| !self.players[w].area.contains(&new_chunk))
+            .collect();
+        if !old_watchers.is_empty() {
+            out.push(Outgoing::reliable(
+                Recipients::Many(old_watchers),
+                EventCode::PlayerLeftChunk,
+                encode_player_left_chunk(peer, &lost_sight),
+            ));
+        }
+        out
+    }
+
+    /// `RequestWeaponPickUp`: take the item off the map and tell everyone around.
+    fn pickup(&mut self, peer: u8, req: PickupRequest) -> Vec<Outgoing> {
+        let ok = self
+            .players
+            .get(&peer)
+            .is_some_and(|p| p.alive && p.dropped && !p.downed);
+        if req.player_index != peer || !ok {
+            return Vec::new();
+        }
+        let Some(item) = self.loot.take(req.network_id) else {
+            return Vec::new();
+        };
+        let mut to = self.watchers(chunk_of(item.position));
+        if !to.contains(&peer) {
+            to.push(peer);
+        }
+        vec![Outgoing::reliable(
+            Recipients::Many(to),
+            EventCode::WeaponPickUpAccepted,
+            encode_pickup_accepted(peer, &item, req.slot),
+        )]
+    }
+
+    /// `RequestItemDrop`: the player drops something; it becomes new loot.
+    fn item_drop(&mut self, peer: u8, req: DropRequest) -> Vec<Outgoing> {
+        let ok = self.players.get(&peer).is_some_and(|p| p.alive);
+        if req.player_index != peer
+            || !ok
+            || req.quantity <= 0
+            || !req.position.iter().all(|v| v.is_finite())
+        {
+            return Vec::new();
+        }
+        let item = self.loot.add(req.item_id, req.quantity, req.position);
+        let mut to = self.watchers(chunk_of(item.position));
+        if !to.contains(&peer) {
+            to.push(peer);
+        }
+        vec![Outgoing::reliable(
+            Recipients::Many(to),
+            EventCode::ItemDrop,
+            encode_item_drop(&item),
+        )]
+    }
+
+    /// Remember what a player holds, from `WeaponChange`
+    /// (`[player, slot, w1, w1 attachment, w2, w2 attachment, w3, n, attachments…]`).
+    fn track_equipment(&mut self, peer: u8, payload: &[u8]) {
+        let mut r = tabg_protocol::Reader::new(payload);
+        let parsed = (|| -> Result<_, tabg_protocol::DecodeError> {
+            let (index, slot) = (r.u8()?, r.u8()?);
+            let mut shorts = [0i16; 5];
+            for s in &mut shorts {
+                *s = r.u16()? as i16;
+            }
+            let n = r.u8()?;
+            let attachments = (0..n)
+                .map(|_| r.u16().map(|v| v as i16))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((index, slot, shorts, attachments))
+        })();
+        let Ok((index, slot, w, attachments)) = parsed else {
+            return;
+        };
+        let Some(p) = self.players.get_mut(&peer).filter(|_| index == peer) else {
+            return;
+        };
+        p.equipment = [w[0], w[1], w[2], w[3], w[4], i16::from(slot)];
+        p.attachments = attachments;
+        p.weapon_type = match slot {
+            0 => i32::MIN,
+            1 => i32::from(w[0]),
+            2 => i32::from(w[2]),
+            _ => i32::from(w[4]),
+        };
     }
 
     fn airplane_drop(&mut self, peer: u8, req: RequestAirplaneDrop) -> Vec<Outgoing> {
@@ -487,11 +742,13 @@ impl Room {
             position,
             direction: req.direction,
         };
-        vec![Outgoing::reliable(
+        let mut out = vec![Outgoing::reliable(
             Recipients::All,
             EventCode::PlayerAirplaneDropped,
             msg.encode(),
-        )]
+        )];
+        out.extend(self.force_chunk_entry(peer));
+        out
     }
 
     /// Forward a packet whose first byte is the sending player's index, unchanged.
@@ -773,13 +1030,16 @@ impl Room {
                             p.dropped = true;
                             p.position = position;
                         }
-                        out.extend(still_aboard.into_iter().map(|i| {
+                        out.extend(still_aboard.iter().map(|&i| {
                             Outgoing::reliable(
                                 Recipients::One(i),
                                 EventCode::AllDrop,
                                 encode_all_drop(position),
                             )
                         }));
+                        for i in still_aboard {
+                            out.extend(self.force_chunk_entry(i));
+                        }
                     }
                 }
                 let ring_events = self.ring.tick(now, &mut self.rng);
@@ -819,13 +1079,18 @@ impl Room {
             p.downed = false;
             p.last_attacker = NOBODY;
             p.kills = 0;
+            p.area.clear();
         }
+        let (modifier, loot) =
+            LootWorld::spawn(&self.settings.loot, self.settings.loot_keep, &mut self.rng);
+        self.modifier = modifier;
+        self.loot = loot;
         let plane = Plane::take_off(self.ring.white_center, now, &mut self.rng);
         let flying = GameStateChanged::Flying {
             start: plane.start,
             end: plane.end,
             time_of_day: self.settings.time_of_day,
-            modifier: 0,
+            modifier,
         };
         self.plane = Some(plane);
         // The official server is internally `Started` while players are still in the plane.
@@ -887,7 +1152,8 @@ impl Room {
             p.dirty = false;
         }
 
-        // TODO(M3): only send what is near each receiver, like the official chunk system.
+        // In the lobby everyone sees everyone; during the match only what is in the receiver's
+        // 3×3 chunk area (players still in the plane see nobody).
         self.players
             .values()
             .filter(|r| r.in_world)
@@ -895,6 +1161,9 @@ impl Room {
                 let entities: Vec<_> = movers
                     .iter()
                     .filter(|e| e.player_index != receiver.index)
+                    .filter(|e| {
+                        !in_match || receiver.area.contains(&self.players[&e.player_index].chunk)
+                    })
                     .cloned()
                     .collect();
                 (!entities.is_empty()).then(|| Outgoing {
@@ -929,6 +1198,7 @@ fn clean_name(raw: &str) -> String {
 mod tests {
     use super::*;
     use tabg_protocol::combat::{DamageEvent, PlayerDamaged, PlayerDead, TeamDead};
+    use tabg_protocol::loot::{ChunkEntry, ChunkExit, DropRequest, PickupRequest};
     use tabg_protocol::match_flow::{GameStateChanged, PlayerAirplaneDropped, RingUpdate};
     use tabg_protocol::messages::{EntityBody, game_mode};
 
@@ -1287,12 +1557,157 @@ mod tests {
             player_index: 0,
             direction: [0.0, -1.0, 0.0],
         };
+        let out = room.handle(
+            0,
+            &Packet::new(EventCode::RequestAirplaneDrop, req.encode()),
+        );
+        let at = PlayerAirplaneDropped::decode(&out[0].packet.payload)
+            .unwrap()
+            .position;
+        // Player 1 is still in the plane: it sees nobody.
+        let near = ClientPlayerUpdate { position: at, ..up };
+        room.handle(0, &Packet::new(EventCode::PlayerUpdate, near.encode()));
+        assert!(events(&room.tick(11.2), EventCode::PlayerUpdate).is_empty());
+        // Once it jumped too (same spot), it sees player 0 move.
+        let req1 = RequestAirplaneDrop {
+            player_index: 1,
+            ..req
+        };
+        room.handle(
+            1,
+            &Packet::new(EventCode::RequestAirplaneDrop, req1.encode()),
+        );
+        room.handle(0, &Packet::new(EventCode::PlayerUpdate, near.encode()));
+        assert_eq!(events(&room.tick(11.4), EventCode::PlayerUpdate).len(), 1);
+    }
+
+    /// A match with loot: one spot at the drop point and one far away.
+    fn loot_room() -> (Room, [f32; 3]) {
+        let mut room = match_room();
+        run(&mut room, 0.0, 10.5);
+        let plane = room.plane.clone().unwrap();
+        let here = plane.drop_position(10.5);
+        let modifier = crate::loot::Modifier {
+            index: 4,
+            rarity: 0,
+            drops: vec![crate::loot::Drop {
+                weight: 1.0,
+                items: vec![(6, 30)],
+            }],
+        };
+        room.settings.loot = crate::loot::LootRules {
+            spots: vec![
+                crate::loot::Spot {
+                    position: [here[0], 0.0, here[2]],
+                    force: true,
+                },
+                crate::loot::Spot {
+                    position: [here[0] + 2000.0, 0.0, here[2]],
+                    force: true,
+                },
+            ],
+            modifiers: vec![modifier],
+        };
+        let (_, loot) = LootWorld::spawn(&room.settings.loot, 1.0, &mut room.rng);
+        room.loot = loot;
+        (room, here)
+    }
+
+    #[test]
+    fn jumping_sends_the_loot_around_you() {
+        let (mut room, _) = loot_room();
+        let req = RequestAirplaneDrop {
+            player_index: 0,
+            direction: [0.0, -1.0, 0.0],
+        };
+        let out = room.handle(
+            0,
+            &Packet::new(EventCode::RequestAirplaneDrop, req.encode()),
+        );
+        let entry = events(&out, EventCode::ChunkEntry);
+        assert_eq!(entry[0].to, Recipients::One(0));
+        let entry = ChunkEntry::decode(&entry[0].packet.payload).unwrap();
+        assert_eq!(entry.loot.len(), 1, "only the nearby spot: {entry:?}");
+        assert_eq!((entry.loot[0].item_id, entry.loot[0].quantity), (6, 30));
+    }
+
+    #[test]
+    fn walking_into_a_new_chunk_sends_entry_and_exit() {
+        let (mut room, here) = loot_room();
+        let req = RequestAirplaneDrop {
+            player_index: 0,
+            direction: [0.0, -1.0, 0.0],
+        };
         room.handle(
             0,
             &Packet::new(EventCode::RequestAirplaneDrop, req.encode()),
         );
-        room.handle(0, &Packet::new(EventCode::PlayerUpdate, up.encode()));
-        assert_eq!(events(&room.tick(11.2), EventCode::PlayerUpdate).len(), 1);
+        let far = [here[0] + 2000.0, 0.0, here[2]];
+        let up = ClientPlayerUpdate {
+            player_index: 0,
+            position: far,
+            rotation: [0.0; 2],
+            aiming_down_sights: false,
+            direction: PackedDirection::ZERO,
+            movement: 0,
+        };
+        let out = room.handle(0, &Packet::new(EventCode::PlayerUpdate, up.encode()));
+        let entry =
+            ChunkEntry::decode(&events(&out, EventCode::ChunkEntry)[0].packet.payload).unwrap();
+        let exit =
+            ChunkExit::decode(&events(&out, EventCode::ChunkExit)[0].packet.payload).unwrap();
+        assert_eq!(entry.loot.len(), 1, "the far spot came into view");
+        assert_eq!(exit.loot.len(), 1, "the near spot went out of view");
+        // Moving within the same chunk sends nothing.
+        assert!(
+            room.handle(0, &Packet::new(EventCode::PlayerUpdate, up.encode()))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn pickup_removes_loot_once_and_drop_adds_it() {
+        let (mut room, here) = loot_room();
+        let req = RequestAirplaneDrop {
+            player_index: 0,
+            direction: [0.0, -1.0, 0.0],
+        };
+        let out = room.handle(
+            0,
+            &Packet::new(EventCode::RequestAirplaneDrop, req.encode()),
+        );
+        let item = ChunkEntry::decode(&events(&out, EventCode::ChunkEntry)[0].packet.payload)
+            .unwrap()
+            .loot[0]
+            .clone();
+        let take = PickupRequest {
+            player_index: 0,
+            network_id: item.network_id,
+            slot: 1,
+        };
+        let out = room.handle(
+            0,
+            &Packet::new(EventCode::RequestWeaponPickUp, take.encode()),
+        );
+        assert_eq!(out[0].packet.event(), Some(EventCode::WeaponPickUpAccepted));
+        assert!(
+            room.handle(
+                0,
+                &Packet::new(EventCode::RequestWeaponPickUp, take.encode())
+            )
+            .is_empty(),
+            "gone"
+        );
+        // Player 1 is still in the plane and can't pick anything up.
+        let drop = DropRequest {
+            player_index: 0,
+            item_id: 6,
+            quantity: 10,
+            position: here,
+        };
+        let out = room.handle(0, &Packet::new(EventCode::RequestItemDrop, drop.encode()));
+        assert_eq!(out[0].packet.event(), Some(EventCode::ItemDrop));
+        assert_eq!(room.loot().len(), 2);
     }
 
     #[test]

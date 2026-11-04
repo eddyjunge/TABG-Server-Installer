@@ -1,3 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Dev/setup tool, not a gameplay mod: loaded once into a TABG install to export map data. -->
+  <ItemGroup>
+    <!-- TABG's loot databases derive from Odin's SerializedScriptableObject. -->
+    <GameRef Include="Sirenix.Serialization" />
+  </ItemGroup>
 </Project>

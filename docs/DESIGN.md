@@ -242,7 +242,8 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
 - **M3 – Battle Royale playable.** Loot, inventory, weapons, damage, death/revive, ring, plane drop, cars, match flow, win.
   - ~~Match flow.~~ Done 2026-11-04: countdown (players-to-start, timed force start), plane (45 s path through the first ring, 5 s progress sync, jump requests, auto-drop), landing relay, ring cycle with the map's `ring_times` (dumped), last-team-standing win, refusal of late joiners, restart after the end. In the real client: "GAME STARTS IN 3", plane ride, jump, landing, "RING PROGRESS 44 %".
   - ~~Damage and death.~~ Done 2026-11-04: client-reported damage with the official rules (only in the match, only after jumping, 1 s grace after going down, downed damage capped at 50 × 0.12), down-before-death, whole-squad-down kills the squad, revive (to 15 HP), self-reported fall/ring deaths, `PlayerDead`/`TeamDead` with placement, kill counting, and relays for fire (with projectile sync), weapon/gear changes, effects, markers and player state. In the real client: the bot's hit took the player to 40/100, the lethal one triggered "Local player network die", "Handling Team Dead" and the switch to `Ended`.
-  - Next: loot via the chunk system (`ChunkEntry`/`ChunkExit`, pickups, drops, throws, ammo use), then cars.
+  - ~~Loot.~~ Done 2026-11-04: the dumper exports 44,247 loot spots, 14 match modifiers with their weighted presets and 247 item names; at match start a modifier is drawn by rarity, ~10 % of spots are kept (`StripLootByPercentage`), and each gets one weighted drop. The chunk system (128 m chunks, 3×3 view) sends `ChunkEntry` on jumping and entry/exit diffs on crossing chunks, `PlayerEnteredChunk`/`PlayerLeftChunk` to watchers, and movement only to watchers. Pickups and drops work; equipment is tracked from weapon changes. In the real client: landed in town, picked up an M16 and two pistols and fired them.
+  - Not yet: server-side inventory/ammo validation (clients are trusted), throws, vehicles in chunk messages, chat commands. Next: cars.
 - **M4 – tabg v1.** Dashboard, settings and presets, players/admins/console, loadout & ring editor, crash recovery, backups, share/join with client sync, Windows + Linux builds.
 - **M5 – Modes & extras.** Brawl, Gun Game, Bomb, Deception, Test; MatchCore rules; proximity chat relay; Range/DevTest; skins (opt-in); radar.
 - **M6 – Bots & vehicles.** Navmesh bots (FakePlayers successor) and vehicle/FPV rules.
@@ -252,7 +253,7 @@ Knowledge worth keeping, rewritten rather than copied:
 - the client modded-copy recipe (§6);
 - Steam library detection (`libraryfolders.vdf`, registry on Windows, native and Flatpak Steam paths on Linux);
 - server names must use Landfall's word list (`landfallgames/tabg-word-list`), or the server-list heartbeat rejects them;
-- the item ID database (reconcile the conflicting IDs, e.g. ammo 5 vs 6, against the dumped loot tables);
+- the item ID database (now dumped from the game: e.g. 6 = Normal Ammo);
 - the preset contents;
 - the game_settings/TheStarterPack format rules (for import);
 - the pure rule code in Vehicles.Shared;

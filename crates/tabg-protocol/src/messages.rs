@@ -260,8 +260,10 @@ pub struct WorldPlayer {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorldWeapon {
-    pub item_index: i32,
-    pub unique_id: i32,
+    /// Network id of this loot instance (`NetworkGun.Index`).
+    pub network_id: i32,
+    /// Item database id (`NetworkGun.UniqueIdentifier`, despite the name).
+    pub item_id: i32,
     pub quantity: i32,
     pub position: [f32; 3],
 }
@@ -372,8 +374,8 @@ impl WorldState {
         }
         w.i32(i32::try_from(self.weapons.len()).expect("too many weapons"));
         for g in &self.weapons {
-            w.i32(g.item_index)
-                .i32(g.unique_id)
+            w.i32(g.network_id)
+                .i32(g.item_id)
                 .i32(g.quantity)
                 .vec3(g.position);
         }
@@ -451,8 +453,8 @@ impl WorldState {
         let weapons = (0..r.i32()?.max(0))
             .map(|_| {
                 Ok(WorldWeapon {
-                    item_index: r.i32()?,
-                    unique_id: r.i32()?,
+                    network_id: r.i32()?,
+                    item_id: r.i32()?,
                     quantity: r.i32()?,
                     position: r.vec3()?,
                 })

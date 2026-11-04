@@ -89,6 +89,7 @@ fn send_all(host: &mut Host, room: &Room, out: Vec<Outgoing>) {
         let wire = o.packet.to_wire();
         let targets: Vec<u8> = match o.to {
             Recipients::One(p) => vec![p],
+            Recipients::Many(ps) => ps,
             Recipients::All => room.player_ids(),
             Recipients::AllExcept(skip) => room
                 .player_ids()

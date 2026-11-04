@@ -91,8 +91,68 @@ namespace Tabg.WorldDumper
 
             sb.Append("  ],\n");
             AppendRing(sb);
+            sb.Append(",\n");
+            AppendLoot(sb);
             sb.Append("}\n");
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Loot spots in the map, and the match modifiers whose presets decide what spawns there
+        /// (the official server draws every spot from the current modifier's preset).
+        /// </summary>
+        private static void AppendLoot(StringBuilder sb)
+        {
+            var spots = FindObjectsOfType<Landfall.Network.LootTAG>()
+                .Select(t => new { t.transform.position, Force = t.lootPreset != null && t.lootPreset.m_forceSpawn, HasPreset = t.lootPreset != null })
+                .OrderBy(t => t.position.x).ThenBy(t => t.position.z)
+                .ToArray();
+            sb.Append("  \"loot_spots\": [\n");
+            for (int i = 0; i < spots.Length; i++)
+            {
+                var s = spots[i];
+                sb.Append("    {\"position\": [").Append(F(s.position.x)).Append(", ").Append(F(s.position.y)).Append(", ").Append(F(s.position.z))
+                  .Append("], \"force_spawn\": ").Append(s.Force ? "true" : "false")
+                  .Append(", \"has_preset\": ").Append(s.HasPreset ? "true" : "false").Append('}')
+                  .Append(i + 1 < spots.Length ? ",\n" : "\n");
+            }
+
+            sb.Append("  ],\n  \"match_modifiers\": [\n");
+            TABGLootPresetDatabase db = TABGLootPresetDatabase.Instance;
+            var names = new System.Collections.Generic.SortedDictionary<int, string>();
+            bool first = true;
+            for (int i = 0; db != null && i < 256; i++)
+            {
+                MatchModifier m = db.GetMatchModifier(i);
+                if (m == null)
+                {
+                    break;
+                }
+
+                sb.Append(first ? "" : ",\n").Append("    {\"index\": ").Append(m.Index.ToString(CultureInfo.InvariantCulture))
+                  .Append(", \"title\": ").Append(Quote(m.ModifierTitle))
+                  .Append(", \"rarity\": ").Append(((int)m.Rarity).ToString(CultureInfo.InvariantCulture))
+                  .Append(", \"drops\": [");
+                first = false;
+                var drops = m.Preset != null && m.Preset.loot != null ? m.Preset.loot : new System.Collections.Generic.List<LootDropWrapper>();
+                sb.Append(string.Join(", ", drops.Select(d =>
+                {
+                    var items = (d.m_loot ?? new Loot[0])
+                        .Where(l => l.loot != null && l.loot.GetComponent<Pickup>() != null)
+                        .Select(l =>
+                        {
+                            Pickup p = l.loot.GetComponent<Pickup>();
+                            names[p.m_itemIndex] = string.IsNullOrEmpty(p.itemName) ? l.loot.name : p.itemName;
+                            return "[" + p.m_itemIndex.ToString(CultureInfo.InvariantCulture) + ", " + l.quanitity.ToString(CultureInfo.InvariantCulture) + "]";
+                        });
+                    return "{\"spawn_rate\": " + F(d.spawnRate) + ", \"items\": [" + string.Join(", ", items) + "]}";
+                })));
+                sb.Append("]}");
+            }
+
+            sb.Append("\n  ],\n  \"items\": {");
+            sb.Append(string.Join(", ", names.Select(kv => "\"" + kv.Key.ToString(CultureInfo.InvariantCulture) + "\": " + Quote(kv.Value))));
+            sb.Append("}\n");
         }
 
         /// <summary>The ring prefab's timing and the map's ring hot spots (null if no ring exists).</summary>
@@ -115,7 +175,7 @@ namespace Tabg.WorldDumper
                 sb.Append(string.Join(", ", ring.ringHotSpots.Cast<Transform>().Select(t => "[" + F(t.position.x) + ", " + F(t.position.y) + ", " + F(t.position.z) + "]")));
             }
 
-            sb.Append("]\n  }\n");
+            sb.Append("]\n  }");
         }
 
         private static string F(float v) => v.ToString("R", CultureInfo.InvariantCulture);

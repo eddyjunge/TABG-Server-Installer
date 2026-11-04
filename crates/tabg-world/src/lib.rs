@@ -46,6 +46,39 @@ pub struct RingData {
     pub hot_spots: Vec<[f32; 3]>,
 }
 
+/// A place where loot can spawn.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct LootSpot {
+    pub position: [f32; 3],
+    /// Always spawns, regardless of the strip percentage.
+    #[serde(default)]
+    pub force_spawn: bool,
+    #[serde(default = "yes")]
+    pub has_preset: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// One weighted entry of a loot preset: these items, spawned together.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct LootDrop {
+    pub spawn_rate: f32,
+    /// `[item id, quantity]`.
+    pub items: Vec<[i32; 2]>,
+}
+
+/// A match modifier ("Normal game", "Medieval", …): its rarity and its loot preset.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct MatchModifier {
+    pub index: u8,
+    pub title: String,
+    /// 0 common, 1 rare, 2 epic, 3 legendary.
+    pub rarity: u8,
+    pub drops: Vec<LootDrop>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct World {
     pub format: u32,
@@ -55,6 +88,13 @@ pub struct World {
     /// Missing in dumps made before the dumper exported it.
     #[serde(default)]
     pub ring: Option<RingData>,
+    #[serde(default)]
+    pub loot_spots: Vec<LootSpot>,
+    #[serde(default)]
+    pub match_modifiers: Vec<MatchModifier>,
+    /// Item id (as a string key) → name.
+    #[serde(default)]
+    pub items: std::collections::BTreeMap<String, String>,
 }
 
 impl World {

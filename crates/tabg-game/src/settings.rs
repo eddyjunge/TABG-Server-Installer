@@ -1,5 +1,6 @@
 use tabg_protocol::messages::{game_mode, match_mode};
 
+use crate::loot::LootRules;
 use crate::ring::RingRules;
 
 /// A place where joining players appear, with their facing.
@@ -36,6 +37,10 @@ pub struct RoomSettings {
     /// Sent to clients; the official server doesn't use it for timing.
     pub time_before_first_ring: f32,
     pub ring: RingRules,
+    /// Loot spots and match modifiers from the map data (empty: no loot).
+    pub loot: LootRules,
+    /// Share of loot spots used per match (`StripLootByPercentage`; the official default is 0.1).
+    pub loot_keep: f32,
     pub lives_per_team: i32,
     pub kills_to_win: u16,
     /// Movement updates per second (the official server uses 30).
@@ -64,6 +69,8 @@ impl Default for RoomSettings {
             time_of_day: 0.25,
             time_before_first_ring: 70.0,
             ring: RingRules::default(),
+            loot: LootRules::default(),
+            loot_keep: 0.1,
             lives_per_team: 256,
             kills_to_win: 20,
             tick_rate: 30,
