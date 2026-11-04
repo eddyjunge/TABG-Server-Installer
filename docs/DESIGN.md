@@ -225,7 +225,8 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
   - ~~`tabg-protocol` for the join/spawn/movement messages.~~ Done; the join broadcast and accept reply match Landfall's server byte for byte, and its full world state (118 cars) decodes.
   - ~~ENet transport.~~ Done (`tabg-enet-sys` + `tabg-net`); Landfall's server accepts our ENet connections.
   - Our server (`tabg-server`) accepts players, sends the world, and replicates movement; two probes see each other move (end-to-end test).
-  - **Open:** a real client joins by IP (direct-connect field, `IP:port`), spawns, and sees a second client move. Needs a person at the game.
+  - ~~A real client joins by IP.~~ Done 2026-11-04, fully automated: `scripts/real-client-test.sh` launches a test copy of the real client under Proton with the `DevAutoJoin` dev plugin, which joins `127.0.0.1:7777` from the main menu. The unmodified game logic loaded `MainWorld_Base`, spawned at our lobby spawn, showed "WAITING FOR PLAYERS / 1 ALIVE / 100 HP", and kept pinging and sending movement.
+  - **Open:** the real client sees a second player (a `tabg-probe` bot walking in front of it) move.
   - ~~Dumper v0.~~ `mods/src/WorldDumper` + `scripts/dump-world.sh` export the lobby spawn points (6 on `ServerTerrain`, identical to what Landfall's server hands out) from the host's own dedicated-server install, offline; `tabg-server --world` uses them. Interactables, loot spawners and cars come with M3.
 
   Findings from the reference server (2026-11-04):
@@ -235,6 +236,8 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
   - A player with no weapon has `weapon_type = i32::MAX`.
   - After the world state the official server also sends `RecievedSteamID` (1 byte); we don't yet.
   - The client has a direct-connect UI (`IP[:port]`, default port 7777) besides join codes.
+  - The real client zero-pads its `RoomInit` too, and its last flag is `FillUpSquad`.
+  - Joining before the client's Epic login completes fails with "Failed generating token" (the client fetches an EOS id token right after the ENet connect).
 - **M2 – Join codes.** UGS sign-in, relay allocation, Unity Transport, server-list heartbeat, UPnP fallback.
 - **M3 – Battle Royale playable.** Loot, inventory, weapons, damage, death/revive, ring, plane drop, cars, match flow, win.
 - **M4 – tabg v1.** Dashboard, settings and presets, players/admins/console, loadout & ring editor, crash recovery, backups, share/join with client sync, Windows + Linux builds.

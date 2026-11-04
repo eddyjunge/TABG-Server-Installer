@@ -174,7 +174,7 @@ impl Room {
         }
 
         let name = clean_name(&req.player_name);
-        let group = self.group_for(peer, req.squad_id, req.ungrouped);
+        let group = self.group_for(peer, req.squad_id);
         self.pending.retain(|&p| p != peer);
         self.players.insert(
             peer,
@@ -222,8 +222,8 @@ impl Room {
     }
 
     /// Squad members (same non-zero squad id) share a group; everyone else gets their own.
-    fn group_for(&self, peer: u8, squad_id: u64, ungrouped: bool) -> u8 {
-        if squad_id != 0 && !ungrouped {
+    fn group_for(&self, peer: u8, squad_id: u64) -> u8 {
+        if squad_id != 0 {
             if let Some(mate) = self.players.values().find(|p| p.squad_id == squad_id) {
                 return mate.group;
             }

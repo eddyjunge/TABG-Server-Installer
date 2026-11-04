@@ -61,11 +61,11 @@ pub struct RoomInitRequest {
     /// Epic product user id, NUL-terminated like `epic_id_token`.
     pub epic_product_user_id: Vec<u8>,
     pub colour: i32,
-    /// Last fixed field. The official server passes `!value` when assigning the player to a
-    /// group; its exact meaning in the client UI is not confirmed yet.
-    pub ungrouped: bool,
-    /// Optional trailing fields (older clients omit them).
+    /// The client's "fill up squad" matchmaking option (join random players into my squad).
+    pub fill_up_squad: bool,
+    /// Unity Authentication player id; the current client always sends it (possibly empty).
     pub unity_id: Option<String>,
+    /// Only sent when the player typed one.
     pub password: Option<String>,
 }
 
@@ -84,7 +84,7 @@ impl RoomInitRequest {
             .i32_prefixed_bytes(&self.epic_id_token)
             .i32_prefixed_bytes(&self.epic_product_user_id)
             .i32(self.colour)
-            .bool(self.ungrouped);
+            .bool(self.fill_up_squad);
         // The password can only be sent after a unity id, as on the official client.
         if self.unity_id.is_some() || self.password.is_some() {
             w.string(self.unity_id.as_deref().unwrap_or(""));
@@ -110,7 +110,7 @@ impl RoomInitRequest {
             epic_id_token: r.i32_prefixed_bytes()?.to_vec(),
             epic_product_user_id: r.i32_prefixed_bytes()?.to_vec(),
             colour: r.i32()?,
-            ungrouped: r.bool()?,
+            fill_up_squad: r.bool()?,
             unity_id: None,
             password: None,
         };
@@ -120,7 +120,8 @@ impl RoomInitRequest {
         if !r.is_empty() {
             msg.password = Some(r.string()?);
         }
-        r.finish()?;
+        // The real client sizes this buffer from an estimate and sends the zero tail.
+        r.finish_allow_zero_padding()?;
         Ok(msg)
     }
 }
@@ -862,7 +863,7 @@ mod tests {
             epic_id_token: b"jwt".to_vec(),
             epic_product_user_id: b"puid".to_vec(),
             colour: 5,
-            ungrouped: false,
+            fill_up_squad: false,
             unity_id: Some("unity".into()),
             password: Some("secret".into()),
         }

@@ -18,9 +18,23 @@ struct Args {
     /// How long to stay connected after joining.
     #[arg(long, default_value_t = 5.0)]
     seconds: f32,
-    /// Write the first payload of every event code into this directory (fixtures).
+    /// Write every received payload into this directory (fixtures).
     #[arg(long)]
     dump: Option<std::path::PathBuf>,
+    /// Walk in circles around this point (x,y,z) instead of around our spawn.
+    #[arg(long, value_parser = parse_vec3, allow_hyphen_values = true)]
+    around: Option<[f32; 3]>,
+    /// Radius of the circle, in metres.
+    #[arg(long, default_value_t = 1.0)]
+    radius: f32,
+}
+
+fn parse_vec3(s: &str) -> Result<[f32; 3], String> {
+    let parts: Vec<f32> = s
+        .split(',')
+        .map(|p| p.trim().parse::<f32>().map_err(|e| e.to_string()))
+        .collect::<Result<_, _>>()?;
+    parts.try_into().map_err(|_| "expected x,y,z".to_string())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -47,13 +61,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             w.phase
         );
     }
-    let start = probe.seen.world.as_ref().map(|w| w.position);
+    let start = args
+        .around
+        .or(probe.seen.world.as_ref().map(|w| w.position));
     let deadline = std::time::Instant::now() + Duration::from_secs_f32(args.seconds);
     let mut t = 0.0f32;
     while std::time::Instant::now() < deadline && !probe.seen.disconnected {
         if let Some(p) = start {
             t += 0.033;
-            probe.move_to([p[0] + t.sin(), p[1], p[2] + t.cos()])?;
+            probe.move_to([
+                p[0] + args.radius * t.sin(),
+                p[1],
+                p[2] + args.radius * t.cos(),
+            ])?;
         }
         probe.pump(Duration::from_millis(33))?;
     }

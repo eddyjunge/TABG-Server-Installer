@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Join our server with the REAL TABG client, automatically, and collect what happens.
+#
+#   scripts/real-client-test.sh [seconds]          (default 90)
+#
+# Uses a separate test copy of your modded client (btrfs reflink, so it costs ~nothing), with only
+# AntiCheatBootErrorRemover + the DevAutoJoin plugin installed. Your own copies are not modified.
+#   TABG_CLIENT_DIR   modded client with BepInEx (source of the test copy)
+#   TABG_TEST_CLIENT  where the test copy lives (default ~/.local/share/tabg/test-client)
+#   TABG_WORLD        world file for the server (default target/tabg-world.json)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+SECONDS_TO_RUN=${1:-90}
+SRC=${TABG_CLIENT_DIR:?set TABG_CLIENT_DIR to your modded TABG copy}
+TEST=${TABG_TEST_CLIENT:-$HOME/.local/share/tabg/test-client}
+WORLD=${TABG_WORLD:-target/tabg-world.json}
+STEAM_ROOT="$HOME/.local/share/Steam"
+PROTON="$STEAM_ROOT/steamapps/common/Proton - Experimental/proton"
+OUT=target/real-client-test
+[[ -x "$PROTON" ]] || { echo "Proton Experimental not found at $PROTON"; exit 1; }
+pgrep -x steam >/dev/null || { echo "start Steam first"; exit 1; }
+
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+[ -d "$HOME/.dotnet" ] && export PATH="$HOME/.dotnet:$PATH"
+dotnet build -v q -c Release mods/src/DevAutoJoin >/dev/null
+cargo build -q --release -p tabg-server
+
+if [[ ! -e "$TEST/TotallyAccurateBattlegrounds.exe" ]]; then
+  echo "creating test client copy at $TEST"
+  mkdir -p "$TEST"
+  cp -a --reflink=auto "$SRC"/. "$TEST"/
+fi
+rm -rf "$TEST/BepInEx/plugins" "$TEST/BepInEx/config" "$TEST/BepInEx/LogOutput.log" "$TEST"/BepInEx/autojoin-*.png
+mkdir -p "$TEST/BepInEx/plugins"
+[[ -e "$SRC/BepInEx/plugins/AntiCheatBootErrorRemover.dll" ]] && cp "$SRC/BepInEx/plugins/AntiCheatBootErrorRemover.dll" "$TEST/BepInEx/plugins/"
+cp mods/src/DevAutoJoin/bin/Release/netstandard2.0/Tabg.DevAutoJoin.dll "$TEST/BepInEx/plugins/"
+
+# A previous game instance that is still shutting down makes the next one hang at startup.
+for _ in $(seq 1 60); do pgrep -x TotallyAccurate >/dev/null || break; sleep 1; done
+pgrep -x TotallyAccurate >/dev/null && { echo "TABG is still running; close it first"; exit 1; }
+rm -rf "$OUT"; mkdir -p "$OUT"
+WORLD_ARGS=(); [[ -s "$WORLD" ]] && WORLD_ARGS=(--world "$WORLD")
+RUST_LOG=debug,tabg_server=debug ./target/release/tabg-server --bind 127.0.0.1 --port 7777 "${WORLD_ARGS[@]}" > "$OUT/server.log" 2>&1 &
+SERVER=$!
+trap 'kill $SERVER 2>/dev/null || true' EXIT
+
+(
+  cd "$TEST"
+  export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/823130"
+  export STEAM_COMPAT_APP_ID=823130 SteamAppId=823130 SteamGameId=823130
+  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN=127.0.0.1:7777 TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20))
+  exec "$PROTON" run "$TEST/TotallyAccurateBattlegrounds.exe" > "$PWD/../client-proton.log" 2>&1
+) &
+CLIENT=$!
+# A headless second player walks circles a few metres in front of the first lobby spawn, so the
+# real client has someone to see. TABG_TEST_BOT_AT= (empty) disables it.
+BOT_AT=${TABG_TEST_BOT_AT--414.9,167.13,-498.1}
+if [[ -n "$BOT_AT" ]]; then
+  cargo build -q --release -p tabg-probe
+  ( sleep 45; exec ./target/release/tabg-probe --port 7777 --name tabg-bot --around "$BOT_AT" --radius 2 --seconds $((SECONDS_TO_RUN - 55)) > "$OUT/bot.log" 2>&1 ) &
+fi
+sleep "$SECONDS_TO_RUN"
+pkill -f "$TEST/TotallyAccurateBattlegrounds.exe" 2>/dev/null || true
+wait $CLIENT 2>/dev/null || true
+
+cp "$TEST/BepInEx/LogOutput.log" "$OUT/client-bepinex.log" 2>/dev/null || true
+cp "$TEST"/BepInEx/autojoin-*.png "$OUT/" 2>/dev/null || true
+echo "== client (DevAutoJoin)"; grep -E 'auto-join|Console\] (Player|Not accepted|Join)' "$OUT/client-bepinex.log" | sed 's/^\[[^]]*\] *//' | head -60 || true
+echo "== server"; sed 's/\x1b\[[0-9;]*m//g' "$OUT/server.log" | grep -vE 'code=2 .*PlayerUpdate' | tail -25
+echo "== bot"; head -3 "$OUT/bot.log" 2>/dev/null | cut -c1-160 || true
+echo "screenshots: $(ls "$OUT"/*.png 2>/dev/null | wc -l) in $OUT"

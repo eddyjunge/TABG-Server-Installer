@@ -107,3 +107,20 @@ fn world_state_with_official_zero_padding_decodes() {
     *bytes.last_mut().unwrap() = 1;
     assert!(WorldState::decode(&bytes, game_mode::BATTLE_ROYALE).is_err());
 }
+
+#[test]
+fn room_init_from_the_real_client_is_zero_padded() {
+    // The client allocates 2 bytes per character for every string and sends the whole buffer.
+    let req = RoomInitRequest {
+        player_name: "Jon_ass".into(),
+        epic_id_token: vec![b'x', 0],
+        epic_product_user_id: vec![b'y', 0],
+        unity_id: Some(String::new()),
+        ..Default::default()
+    };
+    let mut bytes = req.encode();
+    bytes.extend([0u8; 40]);
+    let decoded = RoomInitRequest::decode(&bytes).unwrap();
+    assert_eq!(decoded.player_name, "Jon_ass");
+    assert_eq!(decoded.unity_id.as_deref(), Some(""));
+}
