@@ -27,6 +27,22 @@ pub enum TestMap {
     DevTest,
 }
 
+/// Bomb map data and round rules (official `BombGameMode`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BombRules {
+    /// Where the bomb lies at the start of every round.
+    pub spawn: [f32; 3],
+    pub bomb_item: i32,
+    /// What everyone without a saved gun gets each round.
+    pub start_weapon: i32,
+    /// Spawns of team 0 and team 1 (swapped after the side switch).
+    pub team_spawns: [Vec<SpawnPoint>; 2],
+    pub rounds_to_win: u8,
+    pub round_time: f32,
+    pub bomb_time: f32,
+    pub defuse_time: f32,
+}
+
 /// Respawning instead of staying dead (deathmatch, gun game).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Respawn {
@@ -78,6 +94,8 @@ pub struct RoomSettings {
     pub respawn: Option<Respawn>,
     /// With respawns: the match ends after this many seconds (0 = no limit); most kills wins.
     pub time_limit: f32,
+    /// Bomb map data and rules (from a Bomb map dump); used when `game_mode` is Bomb.
+    pub bomb: Option<BombRules>,
     /// Brawl houses and loot (from a Brawl map dump); used when `game_mode` is Brawl.
     pub brawl: crate::brawl::BrawlRules,
     /// Let CustomGameSkins clients wear any built-in outfit (host opt-in).
@@ -132,6 +150,7 @@ impl Default for RoomSettings {
             test_map: None,
             skins: false,
             brawl: crate::brawl::BrawlRules::default(),
+            bomb: None,
             tick_rate: 30,
             seed: 0x7ab6,
         }

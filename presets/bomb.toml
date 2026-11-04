@@ -1,0 +1,22 @@
+title = "Bomb"
+description = "TABG's Bomb on the TABG_CS map: buy guns in the countdown, T plants, CT defuses; sides switch at half time. First to 7 rounds."
+
+[config.game]
+mode = "bomb"
+map = "island"
+teams = "solo"
+players_to_start = 2
+countdown = 15
+
+[config.rules]
+respawn = false
+kills_to_win = 0
+time_limit = 0
+gun_game = []
+rounds_to_win = 7
+round_time = 90
+bomb_time = 30
+defuse_time = 5
+
+[config]
+loadout = []

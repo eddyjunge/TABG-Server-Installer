@@ -95,6 +95,14 @@ pub struct BrawlHouse {
     pub spawns: Vec<SpawnPoint>,
 }
 
+/// Bomb map data (from a dump of the dedicated server in Bomb mode).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BombData {
+    pub spawn: [f32; 3],
+    pub bomb_item: i32,
+    pub start_weapon: i32,
+}
+
 /// Brawl map data (from a dump of the dedicated server in Brawl mode).
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct BrawlData {
@@ -170,6 +178,9 @@ pub struct World {
     /// Only in dumps made in Brawl mode.
     #[serde(default)]
     pub brawl: Option<BrawlData>,
+    /// Only in dumps made in Bomb mode.
+    #[serde(default)]
+    pub bomb: Option<BombData>,
 }
 
 impl World {

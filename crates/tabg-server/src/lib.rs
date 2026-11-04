@@ -292,7 +292,7 @@ pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Re
             rotation: p.rotation,
         })
         .collect();
-    if lobby.is_empty() && world.brawl.is_none() {
+    if lobby.is_empty() && world.brawl.is_none() && world.bomb.is_none() {
         return Err("the map data has no lobby spawn points".into());
     }
     settings.spawn_points = lobby;
@@ -361,6 +361,29 @@ pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Re
     if let Some(b) = &world.brawl {
         settings.brawl = brawl_rules(b);
         settings.game_mode = tabg_protocol::messages::game_mode::BRAWL;
+    }
+    if let Some(b) = &world.bomb {
+        let team = |g: i32| -> Vec<SpawnPoint> {
+            world
+                .spawn_group(g)
+                .map(|p| SpawnPoint {
+                    position: p.position,
+                    rotation: p.rotation,
+                })
+                .collect()
+        };
+        // Official defaults (GameSettings): first to 13 rounds of 90 s, 30 s bomb, 5 s defuse.
+        settings.bomb = Some(tabg_game::BombRules {
+            spawn: b.spawn,
+            bomb_item: b.bomb_item,
+            start_weapon: b.start_weapon,
+            team_spawns: [team(0), team(1)],
+            rounds_to_win: 13,
+            round_time: 90.0,
+            bomb_time: 30.0,
+            defuse_time: 5.0,
+        });
+        settings.game_mode = tabg_protocol::messages::game_mode::BOMB;
     }
     Ok(())
 }

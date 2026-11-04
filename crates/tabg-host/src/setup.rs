@@ -43,6 +43,8 @@ pub struct Install {
     pub app_version: String,
     /// Brawl map data (a second export with the server in Brawl mode).
     pub brawl_world: Option<PathBuf>,
+    /// Bomb map data (TABG_CS, exported with the server in Bomb mode).
+    pub bomb_world: Option<PathBuf>,
 }
 
 impl Install {
@@ -274,6 +276,7 @@ pub fn dump_world(
     std::fs::create_dir_all(paths.world_cache()).map_err(|e| e.to_string())?;
     std::fs::copy(&out, &cached).map_err(|e| e.to_string())?;
     progress(&match &world.brawl {
+        None if world.bomb.is_some() => "Bomb map data ready".to_owned(),
         Some(b) => format!(
             "Brawl map data ready: {} team houses, {} solo houses, {} loot presets",
             b.team_houses.len(),
@@ -315,15 +318,23 @@ pub fn run(paths: &Paths, force: bool, progress: &mut dyn FnMut(&str)) -> Result
             .unwrap_or_default();
         install.world = Some(world);
     }
-    if force || install.brawl_world.as_deref().is_none_or(|p| !p.exists()) {
-        progress("exporting the Brawl map too");
-        match dump_world(paths, &server, "Brawl", progress) {
-            Ok(w) => install.brawl_world = Some(w),
-            Err(e) => progress(&format!(
-                "Brawl map export failed (Brawl won't be available): {e}"
-            )),
+    let mut did_any = false;
+    for (mode, slot) in [
+        ("Brawl", &mut install.brawl_world),
+        ("Bomb", &mut install.bomb_world),
+    ] {
+        if force || slot.as_deref().is_none_or(|p| !p.exists()) {
+            did_any = true;
+            progress(&format!("exporting the {mode} map too"));
+            match dump_world(paths, &server, mode, progress) {
+                Ok(w) => *slot = Some(w),
+                Err(e) => progress(&format!(
+                    "{mode} map export failed ({mode} won't be available): {e}"
+                )),
+            }
         }
-    } else {
+    }
+    if !did_any && !force {
         progress("map data already extracted (use --force to redo it)");
     }
     install.save(paths).map_err(|e| e.to_string())?;

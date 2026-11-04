@@ -47,6 +47,8 @@ pub enum GameMode {
     /// TABG's Brawl: teams start in spawn houses on the castle map; a wiped team respawns; most
     /// kills (`rules.kills_to_win`) wins.
     Brawl,
+    /// TABG's Bomb (the TABG_CS map): two teams, rounds with a buy phase, plant and defuse.
+    Bomb,
 }
 
 /// Which map to play.
@@ -206,6 +208,14 @@ pub struct Rules {
     pub time_limit: f32,
     /// Gun game levels: each kill moves you to the next level's items; finishing wins.
     pub gun_game: Vec<Vec<LoadoutItem>>,
+    /// Bomb: rounds a team needs to win (official default 13).
+    pub rounds_to_win: u8,
+    /// Bomb: seconds per round.
+    pub round_time: f32,
+    /// Bomb: seconds from plant to explosion.
+    pub bomb_time: f32,
+    /// Bomb: seconds to defuse.
+    pub defuse_time: f32,
 }
 
 impl Default for Rules {
@@ -216,6 +226,10 @@ impl Default for Rules {
             kills_to_win: 20,
             time_limit: 0.0,
             gun_game: Vec::new(),
+            rounds_to_win: 13,
+            round_time: 90.0,
+            bomb_time: 30.0,
+            defuse_time: 5.0,
         }
     }
 }
@@ -391,11 +405,23 @@ impl ServerToml {
                 "each ring must be smaller than the one before",
             ));
         }
-        if g.mode == GameMode::Brawl && g.map != Map::Island {
+        if matches!(g.mode, GameMode::Brawl | GameMode::Bomb) && g.map != Map::Island {
             p.push(problem(
                 "game.map",
-                "Brawl has its own map; use map = \"island\"",
+                "Brawl and Bomb have their own maps; use map = \"island\"",
             ));
+        }
+        if !(1..=30).contains(&self.rules.rounds_to_win) {
+            p.push(problem("rules.rounds_to_win", "1 to 30 rounds"));
+        }
+        for (field, v) in [
+            ("rules.round_time", self.rules.round_time),
+            ("rules.bomb_time", self.rules.bomb_time),
+            ("rules.defuse_time", self.rules.defuse_time),
+        ] {
+            if !(1.0..=600.0).contains(&v) {
+                p.push(problem(field, "1 to 600 seconds"));
+            }
         }
         if let Some(m) = g.map.client_mod()
             && !self
@@ -495,6 +521,12 @@ impl ServerToml {
             delay: r.respawn_delay,
         });
         s.kills_to_win = r.kills_to_win;
+        if let Some(b) = s.bomb.as_mut() {
+            b.rounds_to_win = r.rounds_to_win;
+            b.round_time = r.round_time;
+            b.bomb_time = r.bomb_time;
+            b.defuse_time = r.defuse_time;
+        }
         s.time_limit = r.time_limit;
         s.gun_game = r
             .gun_game
@@ -521,6 +553,7 @@ fn tabg_protocol_game_mode(mode: GameMode) -> u8 {
         GameMode::BattleRoyale => 0,
         GameMode::Test => 2,
         GameMode::Brawl => 1,
+        GameMode::Bomb => 3,
     }
 }
 

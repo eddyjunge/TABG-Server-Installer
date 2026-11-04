@@ -115,6 +115,7 @@ namespace Tabg.WorldDumper
             sb.Append(",\n");
             AppendCars(sb);
             AppendBrawl(sb);
+            AppendBomb(sb);
             sb.Append("}\n");
             return sb.ToString();
         }
@@ -156,6 +157,9 @@ namespace Tabg.WorldDumper
         private static void AppendBrawl(StringBuilder sb)
         {
             var selectors = Resources.FindObjectsOfTypeAll<BrawlLootSelector>();
+            // The prefab is loaded in every mode; only a live copy in the scene means Brawl.
+            if (!selectors.Any(x => !string.IsNullOrEmpty(x.gameObject.scene.name)))
+                return;
             var sel = selectors.FirstOrDefault(x => string.IsNullOrEmpty(x.gameObject.scene.name)) ?? selectors.FirstOrDefault();
             if (sel == null)
                 return;
@@ -240,6 +244,34 @@ namespace Tabg.WorldDumper
             sb.Append("},\n  \"grenades\": [");
             sb.Append(string.Join(", ", grenades.Select(g => g.ToString(CultureInfo.InvariantCulture))));
             sb.Append("]\n");
+        }
+
+        private static object Field(object o, string name)
+        {
+            return o?.GetType().GetField(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(o);
+        }
+
+        /// <summary>
+        /// Bomb (TABG_CS): where the bomb spawns each round, the bomb's item id and the weapon
+        /// everyone starts a round with. Server-only types, so by reflection.
+        /// </summary>
+        private static void AppendBomb(StringBuilder sb)
+        {
+            Type bombTag = HarmonyLib.AccessTools.TypeByName("DABOMBTAG");
+            UnityEngine.Object tag = bombTag != null ? FindObjectOfType(bombTag) : null;
+            if (tag == null)
+                return;
+            Vector3 spawn = ((Component)tag).transform.position;
+            Type refsType = HarmonyLib.AccessTools.TypeByName("BombGameModeReferences");
+            UnityEngine.Object refs = refsType != null ? FindObjectOfType(refsType) : null;
+            var start = Field(refs, "m_StartWeapon") as Pickup;
+            Type serverClient = HarmonyLib.AccessTools.TypeByName("Landfall.Network.ServerClient");
+            UnityEngine.Object sc = serverClient != null ? FindObjectOfType(serverClient) : null;
+            var bomb = Field(sc, "m_BombPreset") as Pickup;
+            sb.Append(",\n  \"bomb\": {\"spawn\": [").Append(F(spawn.x)).Append(", ").Append(F(spawn.y)).Append(", ").Append(F(spawn.z))
+              .Append("], \"bomb_item\": ").Append((bomb != null ? bomb.m_itemIndex : -1).ToString(CultureInfo.InvariantCulture))
+              .Append(", \"start_weapon\": ").Append((start != null ? start.m_itemIndex : -1).ToString(CultureInfo.InvariantCulture))
+              .Append("}");
         }
 
         private const float CarsWaitSeconds = 120f;

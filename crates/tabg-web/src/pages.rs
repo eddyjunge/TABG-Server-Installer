@@ -368,6 +368,7 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                                 option value="battle_royale" selected[g.mode == GameMode::BattleRoyale] { "Battle Royale" }
                                 option value="test" selected[g.mode == GameMode::Test] { "Test (no plane, no ring)" }
                                 option value="brawl" selected[g.mode == GameMode::Brawl] { "Brawl (castle, spawn houses)" }
+                                option value="bomb" selected[g.mode == GameMode::Bomb] { "Bomb (plant and defuse, rounds)" }
                             }
                         }
                         div {
@@ -404,6 +405,10 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                         (field("Respawn delay (s)", "respawn_delay", c.rules.respawn_delay, ""))
                         (field("Kills to win", "kills_to_win", c.rules.kills_to_win, "With respawns or Brawl; 0: no limit."))
                         (field("Time limit (s)", "time_limit", c.rules.time_limit, "With respawns; 0: none. Most kills wins."))
+                        (field("Bomb: rounds to win", "rounds_to_win", c.rules.rounds_to_win, ""))
+                        (field("Bomb: round time (s)", "round_time", c.rules.round_time, ""))
+                        (field("Bomb: bomb timer (s)", "bomb_time", c.rules.bomb_time, ""))
+                        (field("Bomb: defuse time (s)", "defuse_time", c.rules.defuse_time, ""))
                     }
                 }
                 div.row { button { "Save and apply" } span id="result" {} }
@@ -659,6 +664,7 @@ fn settings_from_form(
     c.game.mode = match f.get("game_mode").map(String::as_str) {
         Some("test") => GameMode::Test,
         Some("brawl") => GameMode::Brawl,
+        Some("bomb") => GameMode::Bomb,
         _ => GameMode::BattleRoyale,
     };
     c.game.map = match f.get("map").map(String::as_str) {
@@ -688,6 +694,10 @@ fn settings_from_form(
     parse(f, "respawn_delay", &mut c.rules.respawn_delay)?;
     parse(f, "kills_to_win", &mut c.rules.kills_to_win)?;
     parse(f, "time_limit", &mut c.rules.time_limit)?;
+    parse(f, "rounds_to_win", &mut c.rules.rounds_to_win)?;
+    parse(f, "round_time", &mut c.rules.round_time)?;
+    parse(f, "bomb_time", &mut c.rules.bomb_time)?;
+    parse(f, "defuse_time", &mut c.rules.defuse_time)?;
     Ok(c)
 }
 

@@ -41,6 +41,7 @@ use crate::ring::{Ring, RingEvent};
 use crate::rng::Rng;
 use crate::settings::{RoomSettings, SpawnPoint};
 
+mod bomb;
 mod console;
 mod maps;
 mod skins;
@@ -158,6 +159,8 @@ pub struct Room {
     match_started_at: f32,
     /// Peers whose CustomGameSkins hello was accepted.
     skins_authorized: Vec<u8>,
+    /// Bomb mode round state.
+    bomb: Option<bomb::BombState>,
 }
 
 impl Room {
@@ -184,6 +187,7 @@ impl Room {
             events: Vec::new(),
             match_started_at: 0.0,
             skins_authorized: Vec::new(),
+            bomb: None,
         };
         room.spawn_cars();
         room
@@ -287,6 +291,10 @@ impl Room {
                 Err(_) => Vec::new(),
             },
             Some(EventCode::RequestWorldState) => self.world_state(peer),
+            Some(EventCode::RequestPurchaseGun) => self.bomb_purchase(peer, &packet.payload),
+            Some(EventCode::RequestPlantBomb) => self.bomb_plant(peer, &packet.payload),
+            Some(EventCode::RequestDefuseBomb) => self.bomb_defuse(peer),
+            Some(EventCode::RequestStopDefuse) => self.bomb_stop_defuse(peer),
             Some(EventCode::RequestAirplaneDrop) => {
                 match RequestAirplaneDrop::decode(&packet.payload) {
                     Ok(req) => self.airplane_drop(peer, req),
@@ -628,6 +636,9 @@ impl Room {
 
     /// Squad members (same non-zero squad id) share a group; everyone else gets their own.
     fn group_for(&self, peer: u8, squad_id: u64) -> u8 {
+        if self.is_bomb() {
+            return self.bomb_group();
+        }
         if squad_id != 0 {
             if let Some(mate) = self.players.values().find(|p| p.squad_id == squad_id) {
                 return mate.group;
@@ -723,6 +734,11 @@ impl Room {
 
     /// Where a player of `group` (re)spawns: their Brawl house, else the next spawn point.
     fn spawn_for(&mut self, group: u8) -> SpawnPoint {
+        if self.is_bomb()
+            && let Some(spawn) = self.bomb_spawn(group)
+        {
+            return spawn;
+        }
         if self.is_brawl()
             && let Some(house) = self.settings.brawl.house(self.solo(), group)
             && !house.spawns.is_empty()
@@ -1245,6 +1261,10 @@ impl Room {
         if req.player_index != peer || !ok {
             return Vec::new();
         }
+        let item_id = self.loot.get(req.network_id).map_or(-1, |i| i.item_id);
+        if !self.bomb_pickup_allowed(peer, item_id) {
+            return Vec::new();
+        }
         let Some(item) = self.loot.take(req.network_id) else {
             return Vec::new();
         };
@@ -1269,6 +1289,7 @@ impl Room {
         {
             return Vec::new();
         }
+        self.bomb_dropped(peer, req.item_id);
         let item = self.loot.add(req.item_id, req.quantity, req.position);
         let mut to = self.watchers(chunk_of(item.position));
         if !to.contains(&peer) {
@@ -1514,6 +1535,10 @@ impl Room {
             ring_death,
         };
         let mut out = vec![Self::broadcast(EventCode::PlayerDead, dead.encode())];
+        if self.is_bomb() {
+            out.extend(self.bomb_kill(victim, last_attacker));
+            return out;
+        }
         if self.is_brawl() {
             // A wiped team comes back at its house (official `BrawlGameMode.TeamDead`).
             if !self.players.values().any(|m| m.group == group && m.alive) {
@@ -1774,6 +1799,9 @@ impl Room {
 
     /// Advance the match: countdown, plane, ring, end of match, restart.
     fn tick_match(&mut self, now: f32, dt: f32) -> Vec<Outgoing> {
+        if self.is_bomb() && self.state != game_state::ENDED {
+            return self.tick_bomb(now, dt);
+        }
         let mut out = Vec::new();
         match self.state {
             game_state::WAITING_FOR_PLAYERS => {
@@ -3618,5 +3646,167 @@ mod tests {
         hit(&mut room, 0, 1, 0.0);
         run(&mut room, 5.0, 5.5);
         assert_eq!(room.state(), game_state::ENDED);
+    }
+
+    fn bomb_room() -> Room {
+        let spawn = |x: f32| {
+            vec![SpawnPoint {
+                position: [x, 1.0, 0.0],
+                rotation: 0.0,
+            }]
+        };
+        let mut room = Room::new(RoomSettings {
+            game_mode: tabg_protocol::messages::game_mode::BOMB,
+            countdown: 5.0,
+            players_to_start: 2,
+            bomb: Some(crate::settings::BombRules {
+                spawn: [-5.0, 0.25, -0.65],
+                bomb_item: 168,
+                start_weapon: 277,
+                team_spawns: [spawn(-50.0), spawn(50.0)],
+                rounds_to_win: 2,
+                round_time: 90.0,
+                bomb_time: 30.0,
+                defuse_time: 5.0,
+            }),
+            ..Default::default()
+        });
+        for (peer, name) in [(0, "t"), (1, "ct")] {
+            join(&mut room, peer, name);
+            enter(&mut room, peer);
+        }
+        room
+    }
+
+    fn bomb_loot_id(room: &Room) -> i32 {
+        room.loot
+            .in_chunks(&tabg_protocol::loot::area_around(chunk_of([
+                -5.0, 0.25, -0.65,
+            ])))
+            .into_iter()
+            .find(|i| i.item_id == 168)
+            .map(|i| i.network_id)
+            .expect("bomb on the map")
+    }
+
+    #[test]
+    fn bomb_rounds_buy_plant_defuse_and_win() {
+        let mut room = bomb_room();
+        assert_eq!(
+            (room.players[&0].group, room.players[&1].group),
+            (0, 1),
+            "teams balanced"
+        );
+        let out = run(&mut room, 0.0, 0.5);
+        assert_eq!(room.state(), game_state::COUNT_DOWN);
+        assert!(!events(&out, EventCode::MoneyChanged).is_empty());
+        assert_eq!(
+            events(&out, EventCode::PlayerRespawn)[0].packet.payload[0],
+            2,
+            "both respawn"
+        );
+        assert_eq!(
+            events(&out, EventCode::GunPurchasedAccepted).len(),
+            2,
+            "start guns"
+        );
+        // Buying works in the buy phase only, and costs money.
+        let mut buy = tabg_protocol::Writer::new();
+        buy.f32(400.0).i32(152).i32(1).i32(90).i32(0);
+        let buy = buy.into_inner();
+        let out = room.handle(1, &Packet::new(EventCode::RequestPurchaseGun, buy.clone()));
+        assert_eq!(events(&out, EventCode::GunPurchasedAccepted).len(), 1);
+        assert!(
+            room.handle(1, &Packet::new(EventCode::RequestPurchaseGun, buy.clone()))
+                .is_empty(),
+            "100 left, can't afford"
+        );
+        let out = run(&mut room, 0.5, 6.0);
+        assert_eq!(room.state(), game_state::STARTED);
+        let started = events(&out, EventCode::GameStateChanged);
+        assert_eq!(
+            started.last().unwrap().packet.payload[..1],
+            [game_state::STARTED]
+        );
+        assert_eq!(
+            started.last().unwrap().packet.payload.len(),
+            5,
+            "with the round time"
+        );
+        assert!(
+            room.handle(1, &Packet::new(EventCode::RequestPurchaseGun, buy))
+                .is_empty(),
+            "no buying now"
+        );
+        // CT can't pick the bomb up; T can, then plants; CT defuses.
+        let bomb = bomb_loot_id(&room);
+        let pick = |p: u8| PickupRequest {
+            player_index: p,
+            network_id: bomb,
+            slot: 0,
+        };
+        assert!(
+            room.handle(
+                1,
+                &Packet::new(EventCode::RequestWeaponPickUp, pick(1).encode())
+            )
+            .is_empty()
+        );
+        assert!(
+            !room
+                .handle(
+                    0,
+                    &Packet::new(EventCode::RequestWeaponPickUp, pick(0).encode())
+                )
+                .is_empty()
+        );
+        let mut at = tabg_protocol::Writer::new();
+        at.vec3([1.0, 0.0, 1.0]);
+        let out = room.handle(
+            0,
+            &Packet::new(EventCode::RequestPlantBomb, at.into_inner()),
+        );
+        assert_eq!(out[0].packet.event(), Some(EventCode::BombPlanted));
+        assert!(
+            room.handle(0, &Packet::new(EventCode::RequestDefuseBomb, vec![]))
+                .is_empty(),
+            "T can't defuse"
+        );
+        let out = room.handle(1, &Packet::new(EventCode::RequestDefuseBomb, vec![]));
+        assert_eq!(out[0].packet.event(), Some(EventCode::BombStartDefuse));
+        let out = run(&mut room, 6.0, 12.0);
+        let over = events(&out, EventCode::GameStateChanged);
+        assert_eq!(
+            over[0].packet.payload,
+            vec![6, 1, 3],
+            "CT (team 1) won by defuse"
+        );
+        assert!(!events(&out, EventCode::ScoresChanged).is_empty());
+        // Intermission, then round 2 (sides switched after round 1 of a first-to-2).
+        let out = run(&mut room, 12.0, 23.0);
+        assert!(
+            !events(&out, EventCode::PlayerRespawn).is_empty(),
+            "next round"
+        );
+        run(&mut room, 23.0, 29.0);
+        assert_eq!(room.state(), game_state::STARTED);
+        hit(&mut room, 0, 1, 0.0);
+        let out = run(&mut room, 29.0, 29.5);
+        let over = events(&out, EventCode::GameStateChanged);
+        assert_eq!(
+            over[0].packet.payload,
+            vec![6, 0, 1],
+            "team 0 won by elimination"
+        );
+        // 1-1: one more round decides.
+        run(&mut room, 29.5, 46.0);
+        hit(&mut room, 1, 0, 0.0);
+        let out = run(&mut room, 46.0, 46.5);
+        assert_eq!(room.state(), game_state::ENDED);
+        assert_eq!(
+            events(&out, EventCode::TeamDead).len(),
+            2,
+            "placements for both teams"
+        );
     }
 }

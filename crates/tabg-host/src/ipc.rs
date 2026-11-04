@@ -48,6 +48,11 @@ pub fn load(paths: &Paths) -> Result<Loaded, String> {
             .brawl_world
             .clone()
             .ok_or("no Brawl map data yet: run `tabg setup --force`")?
+    } else if config.game.mode == crate::config::GameMode::Bomb {
+        install
+            .bomb_world
+            .clone()
+            .ok_or("no Bomb map data yet: run `tabg setup --force`")?
     } else {
         install
             .world
