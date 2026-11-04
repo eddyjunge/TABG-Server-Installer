@@ -8,6 +8,7 @@
 #   TABG_CLIENT_DIR   modded client with BepInEx (source of the test copy)
 #   TABG_TEST_CLIENT  where the test copy lives (default ~/.local/share/tabg/test-client)
 #   TABG_WORLD        world file for the server (default target/tabg-world.json)
+#   TABG_TEST_SERVER_ARGS extra tabg-server flags (e.g. "--loadout 160:1,6:240")
 #   TABG_TEST_RELAY=1 host through Unity Relay and join by code (needs internet) instead of 127.0.0.1
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -43,7 +44,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 WORLD_ARGS=(); [[ -s "$WORLD" ]] && WORLD_ARGS=(--world "$WORLD")
 NET_ARGS=(--bind 127.0.0.1 --port 7777); JOIN=127.0.0.1:7777; BOT_NET=(--port 7777)
 [[ -n "${TABG_TEST_RELAY:-}" ]] && NET_ARGS=(--relay --game-dir "$TEST")
-RUST_LOG=debug,tabg_server=debug ./target/release/tabg-server "${NET_ARGS[@]}" --admin "*" "${WORLD_ARGS[@]}" > "$OUT/server.log" 2>&1 &
+RUST_LOG=debug,tabg_server=debug ./target/release/tabg-server "${NET_ARGS[@]}" --admin "*" ${TABG_TEST_SERVER_ARGS:-} "${WORLD_ARGS[@]}" > "$OUT/server.log" 2>&1 &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null || true' EXIT
 if [[ -n "${TABG_TEST_RELAY:-}" ]]; then

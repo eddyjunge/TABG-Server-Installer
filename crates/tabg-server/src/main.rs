@@ -58,6 +58,30 @@ struct Args {
     /// Direct mode: open the port on the router with UPnP.
     #[arg(long)]
     upnp: bool,
+    /// Items everyone gets on landing, as `item:qty,item:qty` (e.g. `160:1,6:240`).
+    #[arg(long, value_parser = parse_loadout)]
+    loadout: Option<Loadout>,
+}
+
+#[derive(Clone, Debug)]
+struct Loadout(Vec<(i32, i32)>);
+
+fn parse_loadout(s: &str) -> Result<Loadout, String> {
+    s.split(',')
+        .filter(|p| !p.trim().is_empty())
+        .map(|p| {
+            let (item, qty) = p.split_once(':').unwrap_or((p, "1"));
+            Ok((
+                item.trim()
+                    .parse()
+                    .map_err(|_| format!("bad item {item:?}"))?,
+                qty.trim()
+                    .parse()
+                    .map_err(|_| format!("bad quantity {qty:?}"))?,
+            ))
+        })
+        .collect::<Result<_, String>>()
+        .map(Loadout)
 }
 
 /// Used when neither --world nor --spawn is given: one lobby spawn of the default map, as seen from
@@ -89,6 +113,7 @@ fn main() {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(1, |d| d.as_nanos() as u64)
     });
+    let loadout = args.loadout.clone().map(|l| l.0).unwrap_or_default();
     let mut app_version = String::new();
     let mut settings = RoomSettings {
         max_players: args.max_players,
@@ -97,6 +122,7 @@ fn main() {
         countdown: args.countdown,
         seed,
         admins: args.admins.clone(),
+        loadout,
         spawn_points: vec![SpawnPoint {
             position: FALLBACK_SPAWN,
             rotation: 0.0,
