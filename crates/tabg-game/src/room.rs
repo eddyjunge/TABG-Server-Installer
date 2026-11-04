@@ -43,6 +43,7 @@ use crate::settings::{RoomSettings, SpawnPoint};
 
 mod console;
 mod maps;
+mod skins;
 mod voice;
 pub use console::{PlayerInfo, RoomEvent};
 
@@ -124,6 +125,8 @@ struct Player {
     level: usize,
     /// Voice rate limit: (window start, frames in it).
     voice_window: (f32, u16),
+    /// When the CustomGameSkins outfit last changed.
+    last_outfit: f32,
 }
 
 /// One TABG match.
@@ -153,6 +156,8 @@ pub struct Room {
     events: Vec<RoomEvent>,
     /// When the current match started.
     match_started_at: f32,
+    /// Peers whose CustomGameSkins hello was accepted.
+    skins_authorized: Vec<u8>,
 }
 
 impl Room {
@@ -178,6 +183,7 @@ impl Room {
             modifier: 0,
             events: Vec::new(),
             match_started_at: 0.0,
+            skins_authorized: Vec::new(),
         };
         room.spawn_cars();
         room
@@ -247,6 +253,7 @@ impl Room {
     /// A peer disconnected or timed out.
     pub fn disconnect(&mut self, peer: u8) -> Vec<Outgoing> {
         self.pending.retain(|&p| p != peer);
+        self.skins_authorized.retain(|&p| p != peer);
         self.eject(peer);
         let Some(p) = self.players.remove(&peer) else {
             return Vec::new();
@@ -267,6 +274,9 @@ impl Room {
     pub fn handle(&mut self, peer: u8, packet: &Packet) -> Vec<Outgoing> {
         if packet.code == voice::VOICE {
             return self.voice(peer, &packet.payload);
+        }
+        if packet.code == skins::SKINS {
+            return self.skins(peer, &packet.payload);
         }
         if matches!(packet.code, maps::RANGE | maps::DEV_TEST) {
             return self.test_map(peer, packet.code, &packet.payload);
@@ -581,6 +591,7 @@ impl Room {
                 respawn_at: None,
                 level: 0,
                 voice_window: (f32::MIN, 0),
+                last_outfit: f32::MIN,
             },
         );
 
@@ -3396,6 +3407,63 @@ mod tests {
                 }
             )
             .is_empty()
+        );
+    }
+
+    fn skins_msg(op: u8, gear: Option<&[i32]>) -> Packet {
+        let mut payload = b"SKIN\x01".to_vec();
+        payload.push(op);
+        if let Some(g) = gear {
+            payload.extend_from_slice(&(g.len() as i32).to_le_bytes());
+            for v in g {
+                payload.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        Packet { code: 244, payload }
+    }
+
+    #[test]
+    fn skins_are_opt_in_and_broadcast_as_gear_changes() {
+        let mut room = Room::new(lobby());
+        room.connect(0);
+        // Off by default: denied (reason 1 = disabled).
+        let out = room.handle(0, &skins_msg(1, None));
+        assert_eq!(out[0].packet.payload, b"SKIN\x01\x05\x01");
+        let mut room = Room::new(RoomSettings {
+            skins: true,
+            ..lobby()
+        });
+        room.connect(0);
+        assert_eq!(
+            room.handle(0, &skins_msg(1, None))[0].packet.payload,
+            b"SKIN\x01\x02"
+        );
+        join(&mut room, 0, "a");
+        join(&mut room, 1, "b");
+        let outfit = [5, 2, -1, -1, 7, -1, 9, 0, 11, 3, 13, 1];
+        let out = room.handle(0, &skins_msg(3, Some(&outfit)));
+        assert_eq!(out[0].to, Recipients::All);
+        assert_eq!(out[0].packet.event(), Some(EventCode::GearChange));
+        assert_eq!(&out[1].packet.payload[..6], b"SKIN\x01\x04");
+        // Rate limited right after, and garbage outfits are refused.
+        assert_eq!(
+            room.handle(0, &skins_msg(3, Some(&outfit)))[0]
+                .packet
+                .payload[6],
+            5
+        );
+        room.tick(5.0);
+        let bad = [-7; 12];
+        assert_eq!(
+            room.handle(0, &skins_msg(3, Some(&bad)))[0].packet.payload[6],
+            4
+        );
+        // A client that never said hello isn't authorized.
+        assert_eq!(
+            room.handle(1, &skins_msg(3, Some(&outfit)))[0]
+                .packet
+                .payload[6],
+            2
         );
     }
 }

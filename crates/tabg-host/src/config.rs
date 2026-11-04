@@ -135,6 +135,8 @@ pub struct Game {
     pub tick_rate: u32,
     /// Proximity voice range in metres for friends with the ProximityChat mod (0 = off).
     pub voice_range: f32,
+    /// Let friends with the custom-game-skins mod wear any built-in outfit.
+    pub skins: bool,
 }
 
 impl Default for Game {
@@ -158,6 +160,7 @@ impl Default for Game {
             loot_amount: d.loot_keep,
             tick_rate: d.tick_rate,
             voice_range: d.voice_range,
+            skins: false,
         }
     }
 }
@@ -448,6 +451,7 @@ impl ServerToml {
         s.loot_keep = g.loot_amount;
         s.tick_rate = g.tick_rate;
         s.voice_range = g.voice_range;
+        s.skins = g.skins;
         if g.map != Map::Island {
             // Mod maps: Test mode at the map's own spawns; the island's loot and cars don't apply.
             s.game_mode = 2;

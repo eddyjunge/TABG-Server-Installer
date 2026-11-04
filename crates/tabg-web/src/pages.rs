@@ -378,6 +378,7 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                         (field("Time of day", "time_of_day", g.time_of_day, "0–1 (0.25 = morning)."))
                         (field("Tick rate", "tick_rate", g.tick_rate, "Movement updates per second."))
                     (field("Voice range (m)", "voice_range", g.voice_range, "For friends with the ProximityChat mod; 0: off."))
+                    (check("Allow any outfit (custom-game-skins mod)", "skins", g.skins))
                     }
                 }
                 div.row { button { "Save and apply" } span id="result" {} }
@@ -656,6 +657,7 @@ fn settings_from_form(
     parse(f, "time_of_day", &mut c.game.time_of_day)?;
     parse(f, "tick_rate", &mut c.game.tick_rate)?;
     parse(f, "voice_range", &mut c.game.voice_range)?;
+    c.game.skins = f.contains_key("skins");
     c.rules.respawn = f.contains_key("respawn");
     parse(f, "respawn_delay", &mut c.rules.respawn_delay)?;
     parse(f, "kills_to_win", &mut c.rules.kills_to_win)?;
