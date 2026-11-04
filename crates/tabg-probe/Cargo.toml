@@ -10,7 +10,8 @@ rust-version.workspace = true
 [dependencies]
 tabg-net = { path = "../tabg-net" }
 tabg-protocol = { path = "../tabg-protocol" }
-clap = { version = "4.5", features = ["derive"] }
+tabg-utp = { path = "../tabg-utp" }
+clap = { version = "4.5", features = ["derive", "env"] }
 
 [lints]
 workspace = true

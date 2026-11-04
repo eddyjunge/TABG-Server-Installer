@@ -1,0 +1,23 @@
+[package]
+name = "tabg-utp"
+description = "Unity Relay + Unity Transport for TABG: hosts a server behind a Unity Relay join code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.23.1"
+getrandom = "0.4.3"
+hmac = "0.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.0"
+tabg-net = { path = "../tabg-net" }
+thiserror = "2.0.21"
+tracing = "0.1.44"
+ureq = { version = "3.5.1", features = ["json"] }
+
+[lints]
+workspace = true

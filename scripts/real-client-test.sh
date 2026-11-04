@@ -8,6 +8,7 @@
 #   TABG_CLIENT_DIR   modded client with BepInEx (source of the test copy)
 #   TABG_TEST_CLIENT  where the test copy lives (default ~/.local/share/tabg/test-client)
 #   TABG_WORLD        world file for the server (default target/tabg-world.json)
+#   TABG_TEST_RELAY=1 host through Unity Relay and join by code (needs internet) instead of 127.0.0.1
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SECONDS_TO_RUN=${1:-90}
@@ -40,15 +41,27 @@ for _ in $(seq 1 60); do pgrep -x TotallyAccurate >/dev/null || break; sleep 1; 
 pgrep -x TotallyAccurate >/dev/null && { echo "TABG is still running; close it first"; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT"
 WORLD_ARGS=(); [[ -s "$WORLD" ]] && WORLD_ARGS=(--world "$WORLD")
-RUST_LOG=debug,tabg_server=debug ./target/release/tabg-server --bind 127.0.0.1 --port 7777 --admin "*" "${WORLD_ARGS[@]}" > "$OUT/server.log" 2>&1 &
+NET_ARGS=(--bind 127.0.0.1 --port 7777); JOIN=127.0.0.1:7777; BOT_NET=(--port 7777)
+[[ -n "${TABG_TEST_RELAY:-}" ]] && NET_ARGS=(--relay --game-dir "$TEST")
+RUST_LOG=debug,tabg_server=debug ./target/release/tabg-server "${NET_ARGS[@]}" --admin "*" "${WORLD_ARGS[@]}" > "$OUT/server.log" 2>&1 &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null || true' EXIT
+if [[ -n "${TABG_TEST_RELAY:-}" ]]; then
+  CODE=
+  for _ in $(seq 1 30); do
+    CODE=$(sed 's/\x1b\[[0-9;]*m//g' "$OUT/server.log" | grep -oP 'join_code=\K[A-Z0-9]+' | head -1 || true)
+    [[ -n "$CODE" ]] && break; sleep 1
+  done
+  [[ -n "$CODE" ]] || { echo "server never got a join code:"; cat "$OUT/server.log"; exit 1; }
+  echo "relay join code: $CODE"
+  JOIN="code:$CODE"; BOT_NET=(--relay "$CODE" --game-dir "$TEST")
+fi
 
 (
   cd "$TEST"
   export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/823130"
   export STEAM_COMPAT_APP_ID=823130 SteamAppId=823130 SteamGameId=823130
-  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN=127.0.0.1:7777 TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}"
+  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN="$JOIN" TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}"
   exec "$PROTON" run "$TEST/TotallyAccurateBattlegrounds.exe" > "$PWD/../client-proton.log" 2>&1
 ) &
 CLIENT=$!
@@ -57,7 +70,7 @@ CLIENT=$!
 BOT_AT=${TABG_TEST_BOT_AT--414.9,167.13,-498.1}
 if [[ -n "$BOT_AT" ]]; then
   cargo build -q --release -p tabg-probe
-  ( sleep 45; exec ./target/release/tabg-probe --port 7777 --name tabg-bot --around "$BOT_AT" --radius 2 --seconds $((SECONDS_TO_RUN - 55)) ${TABG_TEST_BOT_ARGS:-} > "$OUT/bot.log" 2>&1 ) &
+  ( sleep 45; exec ./target/release/tabg-probe "${BOT_NET[@]}" --name tabg-bot --around "$BOT_AT" --radius 2 --seconds $((SECONDS_TO_RUN - 55)) ${TABG_TEST_BOT_ARGS:-} > "$OUT/bot.log" 2>&1 ) &
 fi
 sleep "$SECONDS_TO_RUN"
 pkill -f "$TEST/TotallyAccurateBattlegrounds.exe" 2>/dev/null || true

@@ -26,6 +26,21 @@ pub enum NetError {
     UnknownPeer(PeerId),
     #[error("ENet refused to send to peer {0}")]
     Send(PeerId),
+    #[error("{0}")]
+    Transport(String),
+}
+
+/// What a game server needs from its network: ENet ([`Host`]) for direct connections, or Unity
+/// Relay (the `tabg-utp` crate) for join codes. Both hand out TABG player indices as peer ids.
+pub trait Transport {
+    /// Wait up to `timeout` for one event. Returns `None` when nothing happened.
+    fn service(&mut self, timeout: Duration) -> Option<NetEvent>;
+    /// Send one TABG packet (`[event code][payload]`).
+    fn send(&mut self, peer: PeerId, data: &[u8], reliable: bool) -> Result<(), NetError>;
+    /// Ask a peer to disconnect (a [`NetEvent::Disconnected`] follows).
+    fn disconnect(&mut self, peer: PeerId);
+    /// Send everything queued now.
+    fn flush(&mut self);
 }
 
 /// ENet peer id. TABG uses it directly as the player index.
@@ -230,6 +245,21 @@ impl Host {
     pub fn flush(&mut self) {
         // SAFETY: self.raw is live.
         unsafe { sys::enet_host_flush(self.raw) };
+    }
+}
+
+impl Transport for Host {
+    fn service(&mut self, timeout: Duration) -> Option<NetEvent> {
+        Host::service(self, timeout)
+    }
+    fn send(&mut self, peer: PeerId, data: &[u8], reliable: bool) -> Result<(), NetError> {
+        Host::send(self, peer, data, reliable)
+    }
+    fn disconnect(&mut self, peer: PeerId) {
+        Host::disconnect(self, peer);
+    }
+    fn flush(&mut self) {
+        Host::flush(self);
     }
 }
 

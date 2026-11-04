@@ -36,6 +36,16 @@ struct Args {
     /// Seed for ring positions and the plane path (random by default).
     #[arg(long)]
     seed: Option<u64>,
+    /// Host through Unity Relay: players type the printed join code into TABG's join box. No port
+    /// forwarding needed. Needs the Unity project id, read from --game-dir.
+    #[arg(long)]
+    relay: bool,
+    /// Relay region (e.g. europe-west4); Unity picks one if unset. `--relay-region list` lists them.
+    #[arg(long)]
+    relay_region: Option<String>,
+    /// A TABG install (client or dedicated server) to read the Unity project id from.
+    #[arg(long, env = "TABG_CLIENT_DIR")]
+    game_dir: Option<std::path::PathBuf>,
 }
 
 /// Used when neither --world nor --spawn is given: one lobby spawn of the default map, as seen from
@@ -176,11 +186,34 @@ fn main() {
             .collect();
     }
 
+    let relay = if args.relay || args.relay_region.is_some() {
+        let dir = args
+            .game_dir
+            .as_deref()
+            .unwrap_or_else(|| fail("--relay needs --game-dir (or TABG_CLIENT_DIR)"));
+        let project_id = tabg_utp::project_id_from_game(dir).unwrap_or_else(|e| fail(e));
+        if args.relay_region.as_deref() == Some("list") {
+            let session = tabg_utp::ugs::Session::sign_in(&project_id).unwrap_or_else(|e| fail(e));
+            for r in session.regions().unwrap_or_else(|e| fail(e)) {
+                println!("{:24} {}", r.id, r.description);
+            }
+            return;
+        }
+        Some(tabg_utp::RelayConfig {
+            project_id,
+            region: args.relay_region,
+            max_players: u32::from(args.max_players),
+        })
+    } else {
+        None
+    };
+
     let stop = Arc::new(AtomicBool::new(false));
     if let Err(e) = run(
         ServerConfig {
             bind: args.bind,
             port: args.port,
+            relay,
             settings,
         },
         stop,

@@ -15,7 +15,8 @@ namespace Tabg.DevAutoJoin
     /// Development harness for testing tabg's server with the real client, without clicking menus.
     /// Does nothing unless TABG_AUTOJOIN is set.
     ///
-    ///   TABG_AUTOJOIN        "ip:port" to join once the main menu is up
+    ///   TABG_AUTOJOIN        "ip:port" to join once the main menu is up, or "code:JOINCODE" to join
+    ///                        through Unity Relay like the join-code box does
     ///   TABG_AUTOJOIN_QUIT   seconds after joining to quit the game (default: never)
     ///   TABG_AUTOJOIN_SHOTS  comma-separated seconds after joining to take screenshots
     ///   TABG_AUTOJOIN_JUMP   jump out of the plane at this fraction of its 45 s flight (e.g. 0.5)
@@ -153,11 +154,18 @@ namespace Tabg.DevAutoJoin
                     return;
                 }
 
+                _sinceJoin = 0f;
+                if (_target.StartsWith("code:", StringComparison.Ordinal))
+                {
+                    string code = _target.Substring("code:".Length);
+                    Logger.LogInfo($"Joining relay code {code} (scene {SceneManager.GetActiveScene().name})");
+                    ServerConnector.Instance.ConnectToRelayServer(code);
+                    return;
+                }
                 string[] parts = _target.Split(':');
                 ushort port = parts.Length > 1 ? ushort.Parse(parts[1]) : (ushort)7777;
                 Logger.LogInfo($"Joining {parts[0]}:{port} (scene {SceneManager.GetActiveScene().name})");
                 ServerConnector.Instance.ConnectToServerIP(parts[0], port);
-                _sinceJoin = 0f;
                 return;
             }
 

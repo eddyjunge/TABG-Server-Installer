@@ -33,6 +33,12 @@ struct Args {
     hit_player: Option<u8>,
     #[arg(long, default_value_t = 60.0)]
     hit_at: f32,
+    /// Join through Unity Relay with this join code instead of --host/--port.
+    #[arg(long)]
+    relay: Option<String>,
+    /// TABG install to read the Unity project id from (for --relay).
+    #[arg(long, env = "TABG_CLIENT_DIR")]
+    game_dir: Option<std::path::PathBuf>,
 }
 
 fn parse_vec3(s: &str) -> Result<[f32; 3], String> {
@@ -45,7 +51,22 @@ fn parse_vec3(s: &str) -> Result<[f32; 3], String> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let mut probe = Probe::named(&args.host, args.port, &args.name)?;
+    let mut probe = match &args.relay {
+        Some(code) => {
+            let dir = args
+                .game_dir
+                .as_deref()
+                .ok_or("--relay needs --game-dir (or TABG_CLIENT_DIR)")?;
+            let project = tabg_utp::project_id_from_game(dir)?;
+            let client = tabg_utp::RelayClient::join(&project, code)?;
+            Probe::over(
+                Box::new(client),
+                tabg_utp::client::SERVER,
+                Probe::request_for(&args.name),
+            )
+        }
+        None => Probe::named(&args.host, args.port, &args.name)?,
+    };
     let joined = probe.pump_until(Duration::from_secs(10), |s| {
         s.world.is_some()
             || s.disconnected

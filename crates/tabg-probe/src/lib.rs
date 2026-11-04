@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use tabg_net::{Host, NetError, NetEvent, PeerId};
+use tabg_net::{Host, NetError, NetEvent, PeerId, Transport};
 use tabg_protocol::messages::{
     ClientPlayerUpdate, EntityBody, PackedDirection, PlayerJoined, PlayerUpdateBatch,
     RoomInitRequest, RoomInitResponse, WorldState,
@@ -36,7 +36,7 @@ pub struct Observed {
 }
 
 pub struct Probe {
-    host: Host,
+    host: Box<dyn Transport + Send>,
     server: PeerId,
     request: RoomInitRequest,
     started: Instant,
@@ -48,35 +48,41 @@ impl Probe {
     pub fn connect(addr: &str, port: u16, request: RoomInitRequest) -> Result<Self, NetError> {
         let mut host = Host::client()?;
         let server = host.connect(addr, port)?;
-        Ok(Self {
+        Ok(Self::over(Box::new(host), server, request))
+    }
+
+    /// Join over any transport (e.g. a relay client) whose server peer is `server`.
+    pub fn over(host: Box<dyn Transport + Send>, server: PeerId, request: RoomInitRequest) -> Self {
+        Self {
             host,
             server,
             request,
             started: Instant::now(),
             seen: Observed::default(),
-        })
+        }
     }
 
     pub fn named(addr: &str, port: u16, name: &str) -> Result<Self, NetError> {
-        Self::connect(
-            addr,
-            port,
-            RoomInitRequest {
-                player_name: name.into(),
-                death_phrase: "gg".into(),
-                // Solo players join as the host of a 1-player squad: the official server refuses
-                // anyone without a squad booking (and drops the refusal, so the client just hangs).
-                is_squad_host: true,
-                squad_size: 1,
-                squad_id: name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
-                    (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
-                }),
-                // The official server requires these to be NUL-terminated and throws otherwise.
-                epic_id_token: vec![0],
-                epic_product_user_id: vec![0],
-                ..Default::default()
-            },
-        )
+        Self::connect(addr, port, Self::request_for(name))
+    }
+
+    /// The join request a solo real client sends.
+    pub fn request_for(name: &str) -> RoomInitRequest {
+        RoomInitRequest {
+            player_name: name.into(),
+            death_phrase: "gg".into(),
+            // Solo players join as the host of a 1-player squad: the official server refuses
+            // anyone without a squad booking (and drops the refusal, so the client just hangs).
+            is_squad_host: true,
+            squad_size: 1,
+            squad_id: name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+            }),
+            // The official server requires these to be NUL-terminated and throws otherwise.
+            epic_id_token: vec![0],
+            epic_product_user_id: vec![0],
+            ..Default::default()
+        }
     }
 
     pub fn player_index(&self) -> Option<u8> {
