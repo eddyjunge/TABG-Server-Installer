@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using BepInEx;
+using HarmonyLib;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -17,6 +18,9 @@ namespace Tabg.WorldDumper
     /// Environment:
     ///   TABG_WORLD_OUT   output file (default: tabg-world.json next to the game executable)
     ///   TABG_WORLD_QUIT  "1" to quit the game after writing
+    ///
+    /// The server this runs in never appears in the community server list: its heartbeat is
+    /// switched off.
     /// </summary>
     [BepInPlugin("tabg.worlddumper", "tabg world dumper", "0.1.0")]
     public sealed class WorldDumperPlugin : BaseUnityPlugin
@@ -24,6 +28,17 @@ namespace Tabg.WorldDumper
         private const float GiveUpAfterSeconds = 300f;
         private float _elapsed;
         private bool _done;
+
+        private void Awake()
+        {
+            var heartbeat = AccessTools.Method(typeof(Landfall.TABG.CommunityBackendAPI), "GameServerHeartbeat");
+            if (heartbeat != null)
+            {
+                new Harmony("tabg.worlddumper").Patch(heartbeat, prefix: new HarmonyMethod(typeof(WorldDumperPlugin), nameof(SkipHeartbeat)));
+            }
+        }
+
+        private static bool SkipHeartbeat() => false;
 
         private void Update()
         {

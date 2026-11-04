@@ -248,3 +248,28 @@ mod tests {
         assert_eq!(decode_admin_command(&w.into_inner()).unwrap(), "Start Game");
     }
 }
+
+/// `PlayerLootRecieved` (server → one player): items go straight into the local player's
+/// inventory. `[u16 count]([i32 item][i32 quantity])*[i32 unused]`.
+pub fn encode_player_loot(items: &[(i32, i32)]) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u16(u16::try_from(items.len()).unwrap_or(u16::MAX));
+    for &(item, quantity) in items.iter().take(usize::from(u16::MAX)) {
+        w.i32(item).i32(quantity);
+    }
+    w.i32(0);
+    w.into_inner()
+}
+
+#[cfg(test)]
+mod loot_tests {
+    use super::*;
+
+    #[test]
+    fn player_loot_layout() {
+        assert_eq!(
+            encode_player_loot(&[(6, 120)]),
+            [1, 0, 6, 0, 0, 0, 120, 0, 0, 0, 0, 0, 0, 0]
+        );
+    }
+}

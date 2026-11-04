@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
 tabg-protocol = { path = "../tabg-protocol" }
 
 [lints]

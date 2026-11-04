@@ -32,13 +32,65 @@ pub struct ServerConfig {
 }
 
 /// What a running server tells the outside world.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Status {
     /// Listening for direct connections.
     Listening { bind: String, port: u16 },
     /// Reachable through Unity Relay with this join code.
-    JoinCode(String),
+    JoinCode { code: String },
 }
+
+/// Instructions for a running server (from the host's console, dashboard or CLI).
+#[derive(Clone, Debug)]
+pub enum Command {
+    /// A console line such as `kick bob` or `say hi`.
+    Console(String),
+    /// New settings; see [`Room::apply_settings`] for what takes effect when.
+    Settings(Box<RoomSettings>),
+    Stop,
+}
+
+/// What a running server reports.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Event {
+    Status(Status),
+    Room(tabg_game::RoomEvent),
+    /// The answer to a [`Command::Console`] line.
+    Reply {
+        line: String,
+        reply: String,
+    },
+    /// Who is playing; sent when it changes and every few seconds.
+    Players {
+        phase: String,
+        players: Vec<tabg_game::PlayerInfo>,
+    },
+}
+
+/// The host side of a running server: commands in, events out. Both are non-blocking.
+pub trait Control {
+    fn poll(&mut self) -> Option<Command>;
+    fn emit(&mut self, event: Event);
+}
+
+/// No host: nothing comes in, events are only logged.
+pub struct Standalone;
+
+impl Control for Standalone {
+    fn poll(&mut self) -> Option<Command> {
+        None
+    }
+    fn emit(&mut self, event: Event) {
+        if let Event::Room(e) = event {
+            info!(?e, "room");
+        }
+    }
+}
+
+/// How often [`Event::Players`] is sent even when nothing changed.
+const PLAYERS_EVERY: Duration = Duration::from_secs(3);
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -55,54 +107,77 @@ impl Default for ServerConfig {
 
 /// Run until `stop` is set. Blocks the calling thread.
 pub fn run(config: ServerConfig, stop: Arc<AtomicBool>) -> Result<(), NetError> {
-    run_with_status(config, stop, |_| {})
+    run_controlled(config, stop, &mut Standalone)
 }
 
-/// Like [`run`], reporting how players can reach the server (and join code changes).
-pub fn run_with_status(
+/// Like [`run`], driven by a host: see [`Control`].
+pub fn run_controlled(
     config: ServerConfig,
     stop: Arc<AtomicBool>,
-    mut status: impl FnMut(Status),
+    control: &mut dyn Control,
 ) -> Result<(), NetError> {
     if let Some(relay) = config.relay.clone() {
         let host = RelayHost::host(relay).map_err(|e| NetError::Transport(e.to_string()))?;
         let code = host.join_code_handle();
         let mut last = String::new();
-        let mut address = move || {
+        let address = move |control: &mut dyn Control| {
             let current = code.lock().map(|c| c.clone()).unwrap_or_default();
             if current != last {
                 info!(join_code = %current, "players can join with this code");
-                status(Status::JoinCode(current.clone()));
+                control.emit(Event::Status(Status::JoinCode {
+                    code: current.clone(),
+                }));
                 last.clone_from(&current);
             }
             Address::JoinCode(current)
         };
-        address();
-        return serve(host, config, &stop, address);
+        return serve(host, config, &stop, control, address);
     }
     // Like TABG: one ENet peer per player plus one spare. Peer ids must fit TABG's byte player index.
     let max_peers = (usize::from(config.settings.max_players) + 1).min(255);
     let host = Host::server(&config.bind, config.port, max_peers)?;
     info!(bind = %config.bind, port = config.port, "server listening");
-    status(Status::Listening {
+    control.emit(Event::Status(Status::Listening {
         bind: config.bind.clone(),
         port: config.port,
-    });
+    }));
     let _forwarding = config.upnp.then(|| upnp::forward(config.port)).flatten();
     let port = config.port;
-    serve(host, config, &stop, move || Address::Port(port))
+    serve(host, config, &stop, control, move |_: &mut dyn Control| {
+        Address::Port(port)
+    })
 }
 
 fn serve(
     mut host: impl Transport,
     config: ServerConfig,
     stop: &AtomicBool,
-    mut address: impl FnMut() -> Address,
+    control: &mut dyn Control,
+    mut address: impl FnMut(&mut dyn Control) -> Address,
 ) -> Result<(), NetError> {
     let mut lister = config.listing.map(Lister::start);
     let mut room = Room::new(config.settings);
     let started = Instant::now();
-    while !stop.load(Ordering::Relaxed) {
+    let mut players_sent: Option<Instant> = None;
+    address(control);
+    'run: while !stop.load(Ordering::Relaxed) {
+        while let Some(command) = control.poll() {
+            match command {
+                Command::Console(line) => {
+                    let (out, reply) = room.console(&line);
+                    send_all(&mut host, &room, out);
+                    control.emit(Event::Reply { line, reply });
+                }
+                Command::Settings(settings) => {
+                    room.apply_settings(*settings);
+                    control.emit(Event::Reply {
+                        line: "apply".into(),
+                        reply: "settings applied".into(),
+                    });
+                }
+                Command::Stop => break 'run,
+            }
+        }
         // Wait briefly for the first event so an idle server doesn't spin, then drain the rest.
         let mut wait = Duration::from_millis(2);
         while let Some(event) = host.service(wait) {
@@ -137,7 +212,25 @@ fn serve(
             host.disconnect(u32::from(peer));
         }
         host.flush();
-        let address = address();
+        let mut changed = false;
+        for event in room.take_events() {
+            changed |= matches!(
+                event,
+                tabg_game::RoomEvent::Joined { .. }
+                    | tabg_game::RoomEvent::Left { .. }
+                    | tabg_game::RoomEvent::Killed { .. }
+                    | tabg_game::RoomEvent::MatchState { .. }
+            );
+            control.emit(Event::Room(event));
+        }
+        if changed || players_sent.is_none_or(|t| t.elapsed() >= PLAYERS_EVERY) {
+            players_sent = Some(Instant::now());
+            control.emit(Event::Players {
+                phase: room.phase().to_owned(),
+                players: room.players(),
+            });
+        }
+        let address = address(control);
         if let Some(lister) = lister.as_mut() {
             let settings = room.settings();
             // Like `GameRoom.AcceptingPlayers`: while waiting or counting down.
@@ -186,4 +279,84 @@ fn send_all(host: &mut impl Transport, room: &Room, out: Vec<Outgoing>) {
             }
         }
     }
+}
+
+/// Fill `settings` with the map data from a world dump: lobby spawns, loot, cars, healing items,
+/// grenades and ring timing.
+pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Result<(), String> {
+    use tabg_game::SpawnPoint;
+    let lobby: Vec<_> = world
+        .spawn_group(tabg_world::LOBBY_GROUP)
+        .map(|p| SpawnPoint {
+            position: p.position,
+            rotation: p.rotation,
+        })
+        .collect();
+    if lobby.is_empty() {
+        return Err("the map data has no lobby spawn points".into());
+    }
+    settings.spawn_points = lobby;
+    settings.loot = tabg_game::loot::LootRules {
+        spots: world
+            .loot_spots
+            .iter()
+            .filter(|s| s.has_preset)
+            .map(|s| tabg_game::loot::Spot {
+                position: s.position,
+                force: s.force_spawn,
+            })
+            .collect(),
+        modifiers: world
+            .match_modifiers
+            .iter()
+            .map(|m| tabg_game::loot::Modifier {
+                index: m.index,
+                rarity: m.rarity,
+                drops: m
+                    .drops
+                    .iter()
+                    .map(|d| tabg_game::loot::Drop {
+                        weight: d.spawn_rate,
+                        items: d.items.iter().map(|&[i, q]| (i, q)).collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    settings.cars = world
+        .cars
+        .iter()
+        .map(|c| tabg_game::cars::CarSpawn {
+            car_type: c.car_type,
+            car_index: c.car_index,
+            position: c.position,
+            rotation: c.rotation,
+            seats: c
+                .seats
+                .iter()
+                .map(|s| (s.network_index, s.driver))
+                .collect(),
+            parts: c
+                .parts
+                .iter()
+                .map(|p| tabg_protocol::messages::CarPart {
+                    index: p.index,
+                    health: p.health,
+                    name: p.name.clone(),
+                })
+                .collect(),
+        })
+        .collect();
+    settings.heal_amounts = world
+        .heal_amounts
+        .iter()
+        .filter_map(|(k, &v)| k.parse().ok().map(|k| (k, v)))
+        .collect();
+    settings.grenades = world.grenades.iter().copied().collect();
+    if let Some(ring) = &world.ring {
+        settings.ring.ring_times.clone_from(&ring.ring_times);
+        settings.ring.base_time = ring.base_time_to_travel;
+        settings.ring.hot_spots.clone_from(&ring.hot_spots);
+    }
+    Ok(())
 }

@@ -1,0 +1,16 @@
+title = "Quick Match"
+description = "For a few friends: short countdown, more loot and a ring that moves twice as fast."
+
+[config.game]
+mode = "battle_royale"
+teams = "solo"
+players_to_start = 2
+countdown = 10
+force_start_after = 60
+force_start_min_players = 2
+loot_amount = 0.25
+
+[config.ring]
+times = [20, 20, 15, 15, 10, 10]
+sizes = []
+speeds = []

@@ -1,0 +1,35 @@
+[package]
+name = "tabg-host"
+description = "The tabg host: server config, presets, supervisor, player store, backups, setup and sharing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.23.1"
+dirs = "7.0.0"
+getrandom = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.0"
+tabg-game = { path = "../tabg-game" }
+tabg-server = { path = "../tabg-server" }
+tabg-utp = { path = "../tabg-utp" }
+tabg-world = { path = "../tabg-world" }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["sync"] }
+toml = "1.2.0"
+tracing = "0.1.44"
+ureq = "3.5.1"
+zip = { version = "7.3.0", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[target."cfg(windows)".dependencies]
+winreg = "0.56.0"

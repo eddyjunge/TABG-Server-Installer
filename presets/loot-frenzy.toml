@@ -1,0 +1,9 @@
+title = "Loot Frenzy"
+description = "Four times the loot of a normal match, and everyone lands with bandages."
+
+[config.game]
+mode = "battle_royale"
+loot_amount = 0.4
+
+[config]
+loadout = [{ item = 131, qty = 5 }]

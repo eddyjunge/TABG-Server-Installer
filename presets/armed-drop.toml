@@ -1,0 +1,15 @@
+title = "Armed Drop"
+description = "Everyone lands with an M16, ammo and heals: straight into the fight."
+
+[config.game]
+mode = "battle_royale"
+teams = "solo"
+loot_amount = 0.1
+
+[config]
+loadout = [
+  { item = 160, qty = 1 },   # M16
+  { item = 6, qty = 240 },   # Normal Ammo
+  { item = 131, qty = 5 },   # Bandage
+  { item = 132, qty = 2 },   # Med Kit
+]

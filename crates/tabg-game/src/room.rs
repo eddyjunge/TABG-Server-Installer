@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use tabg_protocol::actions::{
     ADMIN_START_GAME, ChatMessage, HealRequest, HealthStateRequest, ProjectileSyncHeader,
     ThrowRequest, decode_admin_command, encode_item_thrown, encode_player_health,
-    encode_throw_chat,
+    encode_player_loot, encode_throw_chat,
 };
 use tabg_protocol::combat::{
     DamageEvent, PlayerDamaged, PlayerDead, PlayerFireHeader, ReviveRequest, ReviveStage, TeamDead,
@@ -41,6 +41,9 @@ use crate::ring::{Ring, RingEvent};
 use crate::rng::Rng;
 use crate::settings::{RoomSettings, SpawnPoint};
 
+mod console;
+pub use console::{PlayerInfo, RoomEvent};
+
 /// After a match ends, players are disconnected this long later and the room resets (the official
 /// server terminates 15 s after the end).
 pub const RESTART_AFTER_END: f32 = 15.0;
@@ -76,6 +79,8 @@ struct Player {
     index: u8,
     group: u8,
     name: String,
+    /// Stable identity: the Epic product user id when the client sends one.
+    id: String,
     gear: Vec<i32>,
     colour: i32,
     squad_id: u64,
@@ -136,6 +141,8 @@ pub struct Room {
     cars: BTreeMap<i32, Car>,
     /// Match modifier of the current match ("Normal game", …).
     modifier: u8,
+    /// Things worth telling the host about (taken by [`Room::take_events`]).
+    events: Vec<RoomEvent>,
 }
 
 impl Room {
@@ -159,6 +166,7 @@ impl Room {
             loot: LootWorld::default(),
             cars: BTreeMap::new(),
             modifier: 0,
+            events: Vec::new(),
         };
         room.spawn_cars();
         room
@@ -229,9 +237,13 @@ impl Room {
     pub fn disconnect(&mut self, peer: u8) -> Vec<Outgoing> {
         self.pending.retain(|&p| p != peer);
         self.eject(peer);
-        if self.players.remove(&peer).is_none() {
+        let Some(p) = self.players.remove(&peer) else {
             return Vec::new();
-        }
+        };
+        self.events.push(RoomEvent::Left {
+            index: peer,
+            name: p.name,
+        });
         // PlayerLeft: [player index, 1 if they left the game for good].
         vec![Outgoing::reliable(
             Recipients::All,
@@ -435,11 +447,19 @@ impl Room {
             Some(EventCode::PlayerLand) => match self.players.get_mut(&peer) {
                 Some(p) if p.dropped && !p.landed => {
                     p.landed = true;
-                    vec![Outgoing::reliable(
+                    let mut out = vec![Outgoing::reliable(
                         Recipients::All,
                         EventCode::PlayerLand,
                         packet.payload.clone(),
-                    )]
+                    )];
+                    if self.state == game_state::STARTED && !self.settings.loadout.is_empty() {
+                        out.push(Outgoing::reliable(
+                            Recipients::One(peer),
+                            EventCode::PlayerLootRecieved,
+                            encode_player_loot(&self.settings.loadout),
+                        ));
+                    }
+                    out
                 }
                 _ => Vec::new(),
             },
@@ -501,6 +521,15 @@ impl Room {
         }
 
         let name = clean_name(&req.player_name);
+        let id = player_id(&req);
+        if self.is_banned(&name, &id) {
+            self.events.push(RoomEvent::Refused {
+                name,
+                id,
+                reason: "banned".into(),
+            });
+            return refuse(server_response::ERROR, self);
+        }
         let group = self.group_for(peer, req.squad_id);
         self.pending.retain(|&p| p != peer);
         self.players.insert(
@@ -509,6 +538,7 @@ impl Room {
                 index: peer,
                 group,
                 name: name.clone(),
+                id: id.clone(),
                 gear: req.gear.clone(),
                 colour: req.colour,
                 squad_id: req.squad_id,
@@ -533,15 +563,16 @@ impl Room {
                 attachments: Vec::new(),
                 weapon_type: NO_WEAPON,
                 seat: None,
-                is_admin: self
-                    .settings
-                    .admins
-                    .iter()
-                    .any(|a| a == "*" || a.eq_ignore_ascii_case(&name)),
+                is_admin: self.is_admin_name(&name, &id),
                 last_parrot: f32::MIN,
             },
         );
 
+        self.events.push(RoomEvent::Joined {
+            index: peer,
+            name: name.clone(),
+            id,
+        });
         // Same order as the official server: announce the player to everyone, then accept them.
         let joined = PlayerJoined {
             player_index: peer,
@@ -884,97 +915,23 @@ impl Room {
 
     /// `ChatMessage`: relayed to players in the same chunk; admins' `/commands` run instead.
     fn chat(&mut self, peer: u8, msg: ChatMessage, packet: &Packet) -> Vec<Outgoing> {
-        let is_admin = self.players.get(&peer).is_some_and(|p| p.is_admin);
+        let Some(p) = self.players.get(&peer) else {
+            return Vec::new();
+        };
+        let is_admin = p.is_admin;
+        self.events.push(RoomEvent::Chat {
+            index: peer,
+            name: p.name.clone(),
+            text: msg.text.clone(),
+        });
         if let Some(command) = msg.text.strip_prefix('/').filter(|_| is_admin) {
-            return self.run_command(peer, command);
+            return self.player_command(peer, command);
         }
         vec![Outgoing::reliable(
             Recipients::Many(self.same_chunk(peer)),
             EventCode::ChatMessage,
             packet.payload.clone(),
         )]
-    }
-
-    /// Admin chat commands (a native replacement for the Citruslib ones people know).
-    fn run_command(&mut self, peer: u8, command: &str) -> Vec<Outgoing> {
-        let mut words = command.split_whitespace();
-        let reply = |text: String| {
-            Outgoing::reliable(
-                Recipients::One(peer),
-                EventCode::ChatMessage,
-                ChatMessage {
-                    player_index: peer,
-                    text: format!("[tabg] {text}"),
-                }
-                .encode(),
-            )
-        };
-        match words.next().unwrap_or("") {
-            "start" => {
-                let mut out = self.force_start();
-                out.push(reply(if out.is_empty() {
-                    "can only start from the lobby".into()
-                } else {
-                    "starting".into()
-                }));
-                out
-            }
-            "give" => {
-                let (Some(item), qty) = (
-                    words.next().and_then(|w| w.parse::<i32>().ok()),
-                    words
-                        .next()
-                        .and_then(|w| w.parse::<i32>().ok())
-                        .unwrap_or(1),
-                ) else {
-                    return vec![reply("usage: /give <item id> [quantity]".into())];
-                };
-                let at = self.players[&peer].position;
-                let loot = self.loot.add(item, qty.clamp(1, 999), at);
-                let mut to = self.near(peer);
-                if !to.contains(&peer) {
-                    to.push(peer);
-                }
-                vec![
-                    Outgoing::reliable(
-                        Recipients::Many(to),
-                        EventCode::ItemDrop,
-                        encode_item_drop(&loot),
-                    ),
-                    reply(format!("gave {qty} × item {item}")),
-                ]
-            }
-            "heal" => {
-                let p = self.players.get_mut(&peer).expect("sender exists");
-                p.health = 100.0;
-                vec![
-                    Outgoing::reliable(
-                        Recipients::Many(self.near(peer)),
-                        EventCode::PlayerHealthStateChanged,
-                        encode_player_health(peer, 100.0),
-                    ),
-                    reply("healed".into()),
-                ]
-            }
-            "kick" => {
-                let name = words.collect::<Vec<_>>().join(" ");
-                match self
-                    .players
-                    .values()
-                    .find(|p| p.name.eq_ignore_ascii_case(&name))
-                    .map(|p| p.index)
-                {
-                    Some(target) => {
-                        self.to_disconnect.push(target);
-                        vec![reply(format!("kicked {name}"))]
-                    }
-                    None => vec![reply(format!("no player named {name:?}"))],
-                }
-            }
-            other => vec![reply(format!(
-                "unknown command /{other}; try /start, /give, /heal, /kick"
-            ))],
-        }
     }
 
     /// `ThrowChatMessage`: the parrot speaks at the player's position (at most every 0.5 s).
@@ -1480,13 +1437,20 @@ impl Room {
         }
         let p = self.players.get_mut(&victim).expect("still here");
         let (group, last_attacker, name) = (p.group, p.last_attacker, p.name.clone());
+        let mut killer_name = None;
         if let Some(killer) = self
             .players
             .get_mut(&last_attacker)
             .filter(|k| k.group != group)
         {
             killer.kills += 1;
+            killer_name = Some(killer.name.clone());
         }
+        self.events.push(RoomEvent::Killed {
+            victim: name.clone(),
+            killer: killer_name,
+            ring: ring_death,
+        });
         let spectate = self
             .players
             .values()
@@ -1590,6 +1554,9 @@ impl Room {
                 });
                 if enough || forced {
                     self.state = game_state::COUNT_DOWN;
+                    self.events.push(RoomEvent::MatchState {
+                        state: "countdown".into(),
+                    });
                     self.countdown_left = self.settings.countdown;
                     out.push(Self::state_changed(GameStateChanged::CountDown {
                         seconds: self.countdown_left,
@@ -1647,6 +1614,16 @@ impl Room {
                         .unwrap_or(GameStateChanged::NO_WINNER);
                     self.state = game_state::ENDED;
                     self.ended_at = Some(now);
+                    let players = self
+                        .players
+                        .values()
+                        .filter(|p| p.group == winner)
+                        .map(|p| p.name.clone())
+                        .collect();
+                    self.events.push(RoomEvent::Won {
+                        team: winner,
+                        players,
+                    });
                     out.push(Self::state_changed(GameStateChanged::Ended { winner }));
                 }
             }
@@ -1690,6 +1667,9 @@ impl Room {
         self.plane = Some(plane);
         // The official server is internally `Started` while players are still in the plane.
         self.state = game_state::STARTED;
+        self.events.push(RoomEvent::MatchState {
+            state: "started".into(),
+        });
         let ring_events = self.ring.start(now);
         let mut out = vec![Self::state_changed(flying)];
         out.extend(Self::ring_events(ring_events));
@@ -1699,6 +1679,9 @@ impl Room {
     /// Back to the lobby for the next match.
     fn reset(&mut self) {
         self.state = game_state::WAITING_FOR_PLAYERS;
+        self.events.push(RoomEvent::MatchState {
+            state: "lobby".into(),
+        });
         self.plane = None;
         self.ended_at = None;
         self.countdown_left = 0.0;
@@ -1832,6 +1815,32 @@ impl Room {
 }
 
 /// TABG strips surrounding `<`/`>` (rich-text tags) and falls back to "Player".
+/// A stable id for a player: the Epic product user id, else PlayFab, else Unity, else the name.
+fn player_id(req: &RoomInitRequest) -> String {
+    let epic: Vec<u8> = req
+        .epic_product_user_id
+        .iter()
+        .copied()
+        .take_while(|&b| b != 0)
+        .collect();
+    let epic = String::from_utf8_lossy(&epic).trim().to_owned();
+    if !epic.is_empty() {
+        return format!("epic:{epic}");
+    }
+    if !req.playfab_id.trim().is_empty() {
+        return format!("playfab:{}", req.playfab_id.trim());
+    }
+    if let Some(unity) = req
+        .unity_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        return format!("unity:{unity}");
+    }
+    format!("name:{}", clean_name(&req.player_name))
+}
+
 fn clean_name(raw: &str) -> String {
     let trimmed = raw.trim_matches(|c| c == '<' || c == '>').trim();
     if trimmed.is_empty() {
@@ -2865,6 +2874,133 @@ mod tests {
         assert_eq!(
             (out[0].to.clone(), out[0].packet.payload.clone()),
             (Recipients::One(0), vec![1])
+        );
+    }
+
+    #[test]
+    fn events_report_joins_chat_and_leaves_with_ids() {
+        let mut room = Room::new(lobby());
+        room.connect(0);
+        let req = RoomInitRequest {
+            player_name: "alice".into(),
+            squad_size: 1,
+            epic_product_user_id: b"0002abc\0".to_vec(),
+            ..Default::default()
+        };
+        room.handle(0, &Packet::new(EventCode::RoomInit, req.encode()));
+        chat(&mut room, 0, "hi");
+        room.disconnect(0);
+        assert_eq!(
+            room.take_events(),
+            vec![
+                RoomEvent::Joined {
+                    index: 0,
+                    name: "alice".into(),
+                    id: "epic:0002abc".into()
+                },
+                RoomEvent::Chat {
+                    index: 0,
+                    name: "alice".into(),
+                    text: "hi".into()
+                },
+                RoomEvent::Left {
+                    index: 0,
+                    name: "alice".into()
+                },
+            ]
+        );
+        assert!(room.take_events().is_empty());
+    }
+
+    #[test]
+    fn console_bans_and_banned_players_are_refused() {
+        let mut room = Room::new(lobby());
+        join(&mut room, 0, "griefer");
+        room.take_events();
+        let (_, reply) = room.console("ban griefer");
+        assert_eq!(reply, "banned griefer");
+        assert_eq!(room.take_disconnects(), vec![0]);
+        assert_eq!(
+            room.take_events(),
+            vec![RoomEvent::Banned {
+                name: "griefer".into(),
+                id: "name:griefer".into()
+            }]
+        );
+        room.disconnect(0);
+        let out = join(&mut room, 0, "griefer");
+        assert!(matches!(
+            RoomInitResponse::decode(&out[0].packet.payload).unwrap(),
+            RoomInitResponse::Refused { .. }
+        ));
+        // Banning by name works too, case-insensitively.
+        room.apply_settings(RoomSettings {
+            banned: vec!["SOMEONE".into()],
+            ..lobby()
+        });
+        assert!(matches!(
+            RoomInitResponse::decode(&join(&mut room, 1, "someone")[0].packet.payload).unwrap(),
+            RoomInitResponse::Refused { .. }
+        ));
+    }
+
+    #[test]
+    fn console_commands_reply_and_find_players() {
+        let mut room = Room::new(lobby());
+        join(&mut room, 0, "alice");
+        enter(&mut room, 0);
+        assert!(room.console("players").1.contains("#0 alice"));
+        let (out, reply) = room.console("give alice 6 30");
+        assert_eq!(reply, "gave 30 × item 6 to alice");
+        assert_eq!(out[0].packet.event(), Some(EventCode::ItemDrop));
+        let (out, _) = room.console("say hello there");
+        assert_eq!(out.len(), 1);
+        let said = tabg_protocol::actions::ChatMessage::decode(&out[0].packet.payload).unwrap();
+        assert_eq!(said.text, "[tabg] hello there");
+        assert!(room.console("kick #7").1.contains("no player"));
+        assert!(room.console("frobnicate").1.contains("unknown command"));
+        assert_eq!(room.console("/start").1, "starting");
+    }
+
+    #[test]
+    fn apply_settings_updates_admins_of_present_players() {
+        let mut room = Room::new(lobby());
+        join(&mut room, 0, "alice");
+        assert!(!room.players()[0].admin);
+        room.apply_settings(RoomSettings {
+            admins: vec!["Alice".into()],
+            ..lobby()
+        });
+        assert!(room.players()[0].admin);
+    }
+
+    #[test]
+    fn loadout_is_given_on_landing() {
+        let mut room = Room::new(RoomSettings {
+            countdown: 10.0,
+            loadout: vec![(6, 120), (131, 2)],
+            ..Default::default()
+        });
+        for (peer, name) in [(0, "a"), (1, "b")] {
+            join(&mut room, peer, name);
+            enter(&mut room, peer);
+        }
+        run(&mut room, 0.0, 10.5);
+        let req = RequestAirplaneDrop {
+            player_index: 0,
+            direction: [0.0, -1.0, 0.0],
+        };
+        room.handle(
+            0,
+            &Packet::new(EventCode::RequestAirplaneDrop, req.encode()),
+        );
+        let out = room.handle(0, &Packet::new(EventCode::PlayerLand, vec![0]));
+        let loot: Vec<_> = events(&out, EventCode::PlayerLootRecieved);
+        assert_eq!(loot.len(), 1);
+        assert_eq!(loot[0].to, Recipients::One(0));
+        assert_eq!(
+            loot[0].packet.payload,
+            tabg_protocol::actions::encode_player_loot(&[(6, 120), (131, 2)])
         );
     }
 }

@@ -1,0 +1,28 @@
+[package]
+name = "tabg-web"
+description = "The tabg dashboard and local API (axum, server-rendered HTML + htmx, SSE)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum = "0.8.9"
+getrandom = "0.4.3"
+maud = { version = "0.27.0", features = ["axum"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tabg-game = { path = "../tabg-game" }
+tabg-host = { path = "../tabg-host" }
+tabg-world = { path = "../tabg-world" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tracing = "0.1.44"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tower = { version = "0.5.3", features = ["util"] }

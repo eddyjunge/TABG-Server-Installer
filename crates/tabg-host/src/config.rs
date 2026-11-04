@@ -1,0 +1,470 @@
+//! `tabg.toml`: everything about one server, as the host edits it. The dashboard and CLI only
+//! change this file and then apply it (§5.2 of the design).
+
+use serde::{Deserialize, Serialize};
+use tabg_game::{ForceStart, RoomSettings};
+
+/// How players reach the server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NetMode {
+    /// Unity Relay: players type a join code. No port forwarding.
+    #[default]
+    Relay,
+    /// Players connect to `your-ip:port`. Needs UPnP or a forwarded UDP port.
+    Direct,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Teams {
+    Solo,
+    Duo,
+    #[default]
+    Squad,
+}
+
+impl Teams {
+    pub fn match_mode(self) -> u8 {
+        use tabg_server::listing::squad_mode_name;
+        let byte = match self {
+            Self::Solo => 0,
+            Self::Squad => 1,
+            Self::Duo => 2,
+        };
+        debug_assert!(!squad_mode_name(byte).is_empty());
+        byte
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GameMode {
+    #[default]
+    BattleRoyale,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Network {
+    pub mode: NetMode,
+    /// Direct mode: the UDP port.
+    pub port: u16,
+    /// Direct mode: open the port on the router with UPnP.
+    pub upnp: bool,
+    /// Relay mode: region like `europe-west4`; empty lets Unity pick.
+    pub region: String,
+    /// Show the server in TABG's community server browser.
+    pub public: bool,
+}
+
+impl Default for Network {
+    fn default() -> Self {
+        Self {
+            mode: NetMode::Relay,
+            port: 7777,
+            upnp: true,
+            region: String::new(),
+            public: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Game {
+    pub mode: GameMode,
+    pub teams: Teams,
+    pub max_players: u8,
+    /// Empty: no password.
+    pub password: String,
+    /// The countdown starts once this many players are in.
+    pub players_to_start: u8,
+    /// Countdown length in seconds.
+    pub countdown: f32,
+    /// Start anyway after this many seconds in the lobby (0 = never)…
+    pub force_start_after: f32,
+    /// …if at least this many players are there.
+    pub force_start_min_players: u8,
+    /// Lighting, 0..1 (0.25 = morning).
+    pub time_of_day: f32,
+    /// Share of loot spots that get loot each match (the official default is 0.1).
+    pub loot_amount: f32,
+    /// Movement updates per second.
+    pub tick_rate: u32,
+}
+
+impl Default for Game {
+    fn default() -> Self {
+        let d = RoomSettings::default();
+        let f = d.force_start.unwrap_or(ForceStart {
+            after_seconds: 0.0,
+            min_players: 2,
+        });
+        Self {
+            mode: GameMode::BattleRoyale,
+            teams: Teams::Squad,
+            max_players: d.max_players,
+            password: String::new(),
+            players_to_start: d.players_to_start,
+            countdown: d.countdown,
+            force_start_after: f.after_seconds,
+            force_start_min_players: f.min_players,
+            time_of_day: d.time_of_day,
+            loot_amount: d.loot_keep,
+            tick_rate: d.tick_rate,
+        }
+    }
+}
+
+/// Ring overrides; empty lists keep the map's own values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct Ring {
+    /// Pause after each ring, in seconds.
+    pub times: Vec<f32>,
+    /// Ring diameters, largest first.
+    pub sizes: Vec<f32>,
+    /// How fast each ring closes in.
+    pub speeds: Vec<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoadoutItem {
+    pub item: i32,
+    #[serde(default = "one")]
+    pub qty: i32,
+}
+
+fn one() -> i32 {
+    1
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct Players {
+    /// Names or player ids (`epic:…`); `*` makes everyone an admin.
+    pub admins: Vec<String>,
+    /// Names or player ids that may not join.
+    pub banned: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct Mods {
+    /// Client mods friends need (shared with `tabg share`): catalog `id@version`.
+    pub client: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ServerToml {
+    /// Name in the server browser (only words from TABG's word list).
+    pub name: String,
+    pub description: String,
+    /// The preset this config was last based on (informational).
+    pub preset: String,
+    pub network: Network,
+    pub game: Game,
+    pub ring: Ring,
+    /// Items every player gets on landing.
+    pub loadout: Vec<LoadoutItem>,
+    pub players: Players,
+    pub mods: Mods,
+}
+
+impl Default for ServerToml {
+    fn default() -> Self {
+        Self {
+            name: "tabg server".into(),
+            description: String::new(),
+            preset: "battle-royale".into(),
+            network: Network::default(),
+            game: Game::default(),
+            ring: Ring::default(),
+            loadout: Vec::new(),
+            players: Players::default(),
+            mods: Mods::default(),
+        }
+    }
+}
+
+/// One problem with a config: which field and what's wrong.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Problem {
+    pub field: String,
+    pub message: String,
+}
+
+fn problem(field: &str, message: impl Into<String>) -> Problem {
+    Problem {
+        field: field.into(),
+        message: message.into(),
+    }
+}
+
+const WORDS: &str = include_str!("../data/tabg-words.txt");
+
+/// Words the community server list refuses (it only allows Landfall's word list).
+pub fn unlisted_words(text: &str) -> Vec<String> {
+    let mut bad = Vec::new();
+    for word in text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
+        let lower = word.to_lowercase();
+        if !WORDS.lines().any(|w| w == lower) && !bad.contains(&lower) {
+            bad.push(lower);
+        }
+    }
+    bad
+}
+
+pub const HEADER: &str = "\
+# tabg server config. Edit here or in the dashboard, then `tabg apply` (the dashboard applies for
+# you). Unknown keys are errors. See docs/DESIGN.md §5.2.
+";
+
+impl ServerToml {
+    pub fn parse(text: &str) -> Result<Self, String> {
+        toml::from_str(text).map_err(|e| e.to_string())
+    }
+
+    pub fn to_toml(&self) -> String {
+        format!(
+            "{HEADER}\n{}",
+            toml::to_string_pretty(self).expect("config serializes")
+        )
+    }
+
+    /// Everything wrong with this config (empty when it's fine to apply).
+    pub fn validate(&self) -> Vec<Problem> {
+        let mut p = Vec::new();
+        if self.name.trim().is_empty() {
+            p.push(problem("name", "give the server a name"));
+        }
+        if self.name.chars().count() > 64 {
+            p.push(problem("name", "at most 64 characters"));
+        }
+        if self.network.public {
+            for (field, text) in [("name", &self.name), ("description", &self.description)] {
+                let bad = unlisted_words(text);
+                if !bad.is_empty() {
+                    p.push(problem(
+                        field,
+                        format!(
+                            "the server browser only allows TABG's word list; not allowed: {}",
+                            bad.join(", ")
+                        ),
+                    ));
+                }
+            }
+        }
+        if self.network.mode == NetMode::Direct && self.network.port < 1024 {
+            p.push(problem("network.port", "use a port from 1024 to 65535"));
+        }
+        let g = &self.game;
+        if !(1..=250).contains(&g.max_players) {
+            p.push(problem("game.max_players", "1 to 250 players"));
+        }
+        if g.players_to_start == 0 || g.players_to_start > g.max_players {
+            p.push(problem(
+                "game.players_to_start",
+                "at least 1 and at most max_players",
+            ));
+        }
+        if !(0.0..=600.0).contains(&g.countdown) {
+            p.push(problem("game.countdown", "0 to 600 seconds"));
+        }
+        if g.force_start_after < 0.0 {
+            p.push(problem(
+                "game.force_start_after",
+                "0 (never) or more seconds",
+            ));
+        }
+        if !(0.0..=1.0).contains(&g.time_of_day) {
+            p.push(problem("game.time_of_day", "between 0 and 1"));
+        }
+        if !(0.0..=1.0).contains(&g.loot_amount) {
+            p.push(problem("game.loot_amount", "between 0 and 1"));
+        }
+        if !(1..=60).contains(&g.tick_rate) {
+            p.push(problem("game.tick_rate", "1 to 60 per second"));
+        }
+        for (field, list) in [
+            ("ring.times", &self.ring.times),
+            ("ring.sizes", &self.ring.sizes),
+            ("ring.speeds", &self.ring.speeds),
+        ] {
+            if list.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+                p.push(problem(field, "only positive numbers"));
+            }
+        }
+        if !self.ring.sizes.is_empty() && self.ring.sizes.windows(2).any(|w| w[1] > w[0]) {
+            p.push(problem(
+                "ring.sizes",
+                "each ring must be smaller than the one before",
+            ));
+        }
+        for (i, item) in self.loadout.iter().enumerate() {
+            if item.item < 0 || !(1..=999).contains(&item.qty) {
+                p.push(problem(
+                    &format!("loadout[{i}]"),
+                    "item id ≥ 0 and quantity 1 to 999",
+                ));
+            }
+        }
+        p
+    }
+
+    /// Room settings: these rules on top of the map data in `base` (from [`tabg_server::apply_world`]).
+    pub fn room_settings(&self, base: &RoomSettings) -> RoomSettings {
+        let g = &self.game;
+        let mut s = base.clone();
+        s.game_mode = tabg_protocol_game_mode(g.mode);
+        s.match_mode = g.teams.match_mode();
+        s.max_players = g.max_players;
+        s.password = g.password.clone();
+        s.players_to_start = g.players_to_start;
+        s.countdown = g.countdown;
+        s.force_start = (g.force_start_after > 0.0).then_some(ForceStart {
+            after_seconds: g.force_start_after,
+            min_players: g.force_start_min_players.max(1),
+        });
+        s.time_of_day = g.time_of_day;
+        s.loot_keep = g.loot_amount;
+        s.tick_rate = g.tick_rate;
+        if !self.ring.times.is_empty() {
+            s.ring.ring_times.clone_from(&self.ring.times);
+        }
+        if !self.ring.sizes.is_empty() {
+            s.ring.sizes.clone_from(&self.ring.sizes);
+        }
+        if !self.ring.speeds.is_empty() {
+            s.ring.speeds.clone_from(&self.ring.speeds);
+        }
+        s.loadout = self.loadout.iter().map(|l| (l.item, l.qty)).collect();
+        s.admins.clone_from(&self.players.admins);
+        s.banned.clone_from(&self.players.banned);
+        s
+    }
+
+    /// Whether going from `self` to `next` needs a server restart (network changes do).
+    pub fn needs_restart(&self, next: &Self) -> bool {
+        self.network != next.network
+            || self.name != next.name
+            || self.description != next.description
+            || self.game.max_players != next.game.max_players
+            || self.game.mode != next.game.mode
+    }
+}
+
+fn tabg_protocol_game_mode(mode: GameMode) -> u8 {
+    match mode {
+        GameMode::BattleRoyale => 0,
+    }
+}
+
+/// Set a dotted key (`game.max_players`) from text, as `tabg config set` does. The value is
+/// parsed as TOML (`5`, `true`, `"text"`, `[1, 2]`), falling back to a plain string.
+pub fn set_key(config: &ServerToml, key: &str, value: &str) -> Result<ServerToml, String> {
+    let mut root = toml::Table::try_from(config).map_err(|e| e.to_string())?;
+    let parsed: toml::Value = toml::from_str::<toml::Table>(&format!("v = {value}"))
+        .ok()
+        .and_then(|mut t| t.remove("v"))
+        .unwrap_or_else(|| toml::Value::String(value.to_owned()));
+    let parts: Vec<&str> = key.split('.').collect();
+    let (last, path) = parts.split_last().ok_or("empty key")?;
+    let mut table = &mut root;
+    for part in path {
+        table = table
+            .get_mut(*part)
+            .and_then(toml::Value::as_table_mut)
+            .ok_or_else(|| format!("no section {part:?}"))?;
+    }
+    if !table.contains_key(*last) {
+        return Err(format!("unknown key {key:?}"));
+    }
+    table.insert((*last).to_owned(), parsed);
+    toml::Value::Table(root)
+        .try_into()
+        .map_err(|e: toml::de::Error| format!("{key}: {}", e.message()))
+}
+
+/// Read a dotted key as TOML text.
+pub fn get_key(config: &ServerToml, key: &str) -> Result<String, String> {
+    let root = toml::Value::try_from(config).map_err(|e| e.to_string())?;
+    let mut v = &root;
+    for part in key.split('.').filter(|p| !p.is_empty()) {
+        v = v.get(part).ok_or_else(|| format!("unknown key {key:?}"))?;
+    }
+    Ok(match v {
+        toml::Value::Table(t) => toml::to_string_pretty(t).unwrap_or_default(),
+        other => other.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_round_trips_and_is_valid() {
+        let c = ServerToml::default();
+        assert_eq!(ServerToml::parse(&c.to_toml()).unwrap(), c);
+        assert!(c.validate().is_empty(), "{:?}", c.validate());
+    }
+
+    #[test]
+    fn partial_files_fill_in_defaults_and_unknown_keys_fail() {
+        let c = ServerToml::parse("name = \"good fight\"\n[game]\nteams = \"solo\"\n").unwrap();
+        assert_eq!(c.game.teams, Teams::Solo);
+        assert_eq!(c.game.max_players, 70);
+        assert!(ServerToml::parse("[game]\nmax_player = 3\n").is_err());
+    }
+
+    #[test]
+    fn validation_names_the_field() {
+        let mut c = ServerToml::default();
+        c.game.players_to_start = 0;
+        c.ring.sizes = vec![100.0, 200.0];
+        c.network.public = true;
+        c.name = "automated tabg".into();
+        let fields: Vec<_> = c.validate().into_iter().map(|p| p.field).collect();
+        assert_eq!(fields, ["name", "game.players_to_start", "ring.sizes"]);
+        assert_eq!(unlisted_words("tabg dev test, 2!"), Vec::<String>::new());
+        assert_eq!(unlisted_words("(ignore) me zzz"), vec!["ignore", "zzz"]);
+    }
+
+    #[test]
+    fn room_settings_apply_rules_over_map_data() {
+        let mut base = RoomSettings::default();
+        base.ring.ring_times = vec![1.0];
+        let mut c = ServerToml::default();
+        c.game.teams = Teams::Duo;
+        c.game.force_start_after = 0.0;
+        c.loadout = vec![LoadoutItem { item: 6, qty: 60 }];
+        c.players.admins = vec!["me".into()];
+        let s = c.room_settings(&base);
+        assert_eq!(s.match_mode, 2);
+        assert_eq!(s.force_start, None);
+        assert_eq!(s.ring.ring_times, vec![1.0], "map value kept");
+        assert_eq!(s.loadout, vec![(6, 60)]);
+        assert_eq!(s.admins, vec!["me".to_string()]);
+    }
+
+    #[test]
+    fn set_and_get_dotted_keys() {
+        let c = ServerToml::default();
+        let c = set_key(&c, "game.max_players", "12").unwrap();
+        assert_eq!(c.game.max_players, 12);
+        let c = set_key(&c, "name", "friday fight").unwrap();
+        assert_eq!(c.name, "friday fight");
+        let c = set_key(&c, "network.mode", "direct").unwrap();
+        assert_eq!(c.network.mode, NetMode::Direct);
+        assert_eq!(get_key(&c, "game.max_players").unwrap(), "12");
+        assert!(set_key(&c, "game.nope", "1").is_err());
+        assert!(set_key(&c, "game.max_players", "lots").is_err());
+    }
+}

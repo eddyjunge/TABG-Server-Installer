@@ -1,0 +1,16 @@
+title = "Battle Royale"
+description = "TABG as Landfall ships it: squads, 2 players to start, map loot and ring."
+
+[config.game]
+mode = "battle_royale"
+teams = "squad"
+players_to_start = 2
+countdown = 20
+force_start_after = 200
+force_start_min_players = 2
+loot_amount = 0.1
+
+[config.ring]
+times = []
+sizes = []
+speeds = []
