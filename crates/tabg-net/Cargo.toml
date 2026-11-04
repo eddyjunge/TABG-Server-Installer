@@ -1,0 +1,15 @@
+[package]
+name = "tabg-net"
+description = "Safe ENet transport for TABG (wraps tabg-enet-sys)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tabg-enet-sys = { path = "../tabg-enet-sys" }
+thiserror = "2"
+
+[lints]
+workspace = true

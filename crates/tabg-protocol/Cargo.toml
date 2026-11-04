@@ -1,0 +1,14 @@
+[package]
+name = "tabg-protocol"
+description = "TABG network protocol: event codes, message structs and a .NET BinaryReader/Writer-compatible codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = "2"
+
+[lints]
+workspace = true

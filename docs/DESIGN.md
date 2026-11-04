@@ -221,11 +221,20 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
 
 - **M0 – Reset.** Mirror backup → delete old code → purge proprietary binaries from history → force-push → new workspace skeleton. *(Done 2026-11-04: fresh single-commit history; old repo, tags, PR refs and all release downloads are backed up outside the repo.)*
 - **M1 – Proof.**
-  - Recorder mod and one recorded session.
-  - `tabg-protocol` for the join/spawn/movement messages.
-  - ENet transport.
-  - A real client joins by IP on LAN, spawns, and sees a second client move.
-  - Dumper v0 (spawns + interactables).
+  - ~~Recorder mod and one recorded session.~~ Replaced by `scripts/reference-server.sh`: Landfall's own server runs offline in a network namespace and `tabg-probe` joins it, so we capture its real replies without a mod or a human player.
+  - ~~`tabg-protocol` for the join/spawn/movement messages.~~ Done; the join broadcast and accept reply match Landfall's server byte for byte, and its full world state (118 cars) decodes.
+  - ~~ENet transport.~~ Done (`tabg-enet-sys` + `tabg-net`); Landfall's server accepts our ENet connections.
+  - Our server (`tabg-server`) accepts players, sends the world, and replicates movement; two probes see each other move (end-to-end test).
+  - **Open:** a real client joins by IP (direct-connect field, `IP:port`), spawns, and sees a second client move. Needs a person at the game.
+  - **Open:** dumper v0 (spawns + interactables).
+
+  Findings from the reference server (2026-11-04):
+  - The Epic token and product-user-id fields in `RoomInit` must be NUL-terminated or the server throws.
+  - Solo clients must send `RoomInit` as the host of a 1-player squad; otherwise Landfall's server refuses for lack of a booking, and since the refusal goes to a not-yet-accepted peer it is never delivered (the client just times out). Our server doesn't require bookings.
+  - The world state is sent at an estimated size with a zero-filled tail (~3.7 KB extra).
+  - A player with no weapon has `weapon_type = i32::MAX`.
+  - After the world state the official server also sends `RecievedSteamID` (1 byte); we don't yet.
+  - The client has a direct-connect UI (`IP[:port]`, default port 7777) besides join codes.
 - **M2 – Join codes.** UGS sign-in, relay allocation, Unity Transport, server-list heartbeat, UPnP fallback.
 - **M3 – Battle Royale playable.** Loot, inventory, weapons, damage, death/revive, ring, plane drop, cars, match flow, win.
 - **M4 – tabg v1.** Dashboard, settings and presets, players/admins/console, loadout & ring editor, crash recovery, backups, share/join with client sync, Windows + Linux builds.

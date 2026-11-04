@@ -1,0 +1,16 @@
+[package]
+name = "tabg-probe"
+description = "Headless TABG test client: joins a server and reports what it receives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tabg-net = { path = "../tabg-net" }
+tabg-protocol = { path = "../tabg-protocol" }
+clap = { version = "4.5", features = ["derive"] }
+
+[lints]
+workspace = true

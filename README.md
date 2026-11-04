@@ -34,6 +34,11 @@ docs/     design documents
 
 ```bash
 cargo build                 # the tabg tool
+cargo run --release -p tabg-server   # dev: run our game server on UDP 7777
+cargo run --release -p tabg-probe -- --host 127.0.0.1   # headless client that joins and reports
+
+# ground truth: run Landfall's own server offline (network namespace) and probe it
+scripts/reference-server.sh ~/.local/share/Steam/steamapps/common/TotallyAccurateBattlegroundsDedicatedServer
 
 # client mods: point at a modded TABG client copy that has BepInEx installed
 export TABG_CLIENT_DIR=~/.local/share/Steam/steamapps/common/TotallyAccurateBattlegrounds-Modded
