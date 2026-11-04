@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Dev/setup tool, not a gameplay mod: loaded once into a TABG install to export map data. -->
+</Project>

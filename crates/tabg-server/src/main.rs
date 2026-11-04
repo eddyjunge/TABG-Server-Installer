@@ -17,12 +17,17 @@ struct Args {
     max_players: u8,
     #[arg(long, default_value = "")]
     password: String,
-    /// Lobby spawn point as x,y,z (repeatable). The default is the lobby spawn Landfall's server
-    /// used on the default map in our reference run; real spawn lists will come from the map data
-    /// tabg extracts from your own game files.
-    #[arg(long = "spawn", value_parser = parse_vec3, allow_hyphen_values = true, default_value = "-35.7,127.3,-624.4")]
+    /// Map data from `scripts/dump-world.sh`; its lobby spawn points are used.
+    #[arg(long)]
+    world: Option<std::path::PathBuf>,
+    /// Lobby spawn point as x,y,z (repeatable); overrides --world.
+    #[arg(long = "spawn", value_parser = parse_vec3, allow_hyphen_values = true)]
     spawns: Vec<[f32; 3]>,
 }
+
+/// Used when neither --world nor --spawn is given: one lobby spawn of the default map, as seen from
+/// Landfall's server in our reference run.
+const FALLBACK_SPAWN: [f32; 3] = [-35.7, 127.3, -624.4];
 
 fn parse_vec3(s: &str) -> Result<[f32; 3], String> {
     let parts: Vec<f32> = s
@@ -44,16 +49,41 @@ fn main() {
         password: args.password,
         ..Default::default()
     };
-    if !args.spawns.is_empty() {
-        settings.spawn_points = args
-            .spawns
+    settings.spawn_points = if !args.spawns.is_empty() {
+        args.spawns
             .into_iter()
             .map(|position| SpawnPoint {
                 position,
                 rotation: 0.0,
             })
+            .collect()
+    } else if let Some(path) = &args.world {
+        let world = match tabg_world::World::load(path) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        };
+        let lobby: Vec<_> = world
+            .spawn_group(tabg_world::LOBBY_GROUP)
+            .map(|p| SpawnPoint {
+                position: p.position,
+                rotation: p.rotation,
+            })
             .collect();
-    }
+        if lobby.is_empty() {
+            eprintln!("error: {} has no lobby spawn points", path.display());
+            std::process::exit(1);
+        }
+        tracing::info!(count = lobby.len(), scenes = ?world.scenes, "loaded lobby spawn points");
+        lobby
+    } else {
+        vec![SpawnPoint {
+            position: FALLBACK_SPAWN,
+            rotation: 0.0,
+        }]
+    };
     let stop = Arc::new(AtomicBool::new(false));
     if let Err(e) = run(
         ServerConfig {

@@ -37,6 +37,10 @@ cargo build                 # the tabg tool
 cargo run --release -p tabg-server   # dev: run our game server on UDP 7777
 cargo run --release -p tabg-probe -- --host 127.0.0.1   # headless client that joins and reports
 
+# map data: export spawn points from your own server install (offline), then use them
+scripts/dump-world.sh ~/.local/share/Steam/steamapps/common/TotallyAccurateBattlegroundsDedicatedServer
+cargo run --release -p tabg-server -- --world target/tabg-world.json
+
 # ground truth: run Landfall's own server offline (network namespace) and probe it
 scripts/reference-server.sh ~/.local/share/Steam/steamapps/common/TotallyAccurateBattlegroundsDedicatedServer
 

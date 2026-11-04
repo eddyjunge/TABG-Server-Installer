@@ -226,7 +226,7 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
   - ~~ENet transport.~~ Done (`tabg-enet-sys` + `tabg-net`); Landfall's server accepts our ENet connections.
   - Our server (`tabg-server`) accepts players, sends the world, and replicates movement; two probes see each other move (end-to-end test).
   - **Open:** a real client joins by IP (direct-connect field, `IP:port`), spawns, and sees a second client move. Needs a person at the game.
-  - **Open:** dumper v0 (spawns + interactables).
+  - ~~Dumper v0.~~ `mods/src/WorldDumper` + `scripts/dump-world.sh` export the lobby spawn points (6 on `ServerTerrain`, identical to what Landfall's server hands out) from the host's own dedicated-server install, offline; `tabg-server --world` uses them. Interactables, loot spawners and cars come with M3.
 
   Findings from the reference server (2026-11-04):
   - The Epic token and product-user-id fields in `RoomInit` must be NUL-terminated or the server throws.
