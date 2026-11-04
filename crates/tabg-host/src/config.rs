@@ -42,6 +42,45 @@ impl Teams {
 pub enum GameMode {
     #[default]
     BattleRoyale,
+    /// TABG's Test mode: no plane, no ring, everyone starts where they stand.
+    Test,
+}
+
+/// Which map to play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Map {
+    /// The main island.
+    #[default]
+    Island,
+    /// WilhelmTest shooting range (friends need the `range-map` client mod).
+    Range,
+    /// The DevTest island (friends need the `dev-test-map` client mod).
+    DevTest,
+}
+
+impl Map {
+    /// Spawn points of the mod maps (from the old, verified presets).
+    pub fn spawns(self) -> &'static [[f32; 3]] {
+        match self {
+            Self::Island => &[],
+            Self::Range => &[[6.32, 117.10, -25.41]],
+            Self::DevTest => &[
+                [-37.0, 111.0, -11.0],
+                [6.0, 112.0, 21.0],
+                [-2.0, 111.0, 2.0],
+            ],
+        }
+    }
+
+    /// The client mod friends need for this map.
+    pub fn client_mod(self) -> Option<&'static str> {
+        match self {
+            Self::Island => None,
+            Self::Range => Some("range-map"),
+            Self::DevTest => Some("dev-test-map"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,6 +113,8 @@ impl Default for Network {
 #[serde(default, deny_unknown_fields)]
 pub struct Game {
     pub mode: GameMode,
+    /// The island, or a map from a client mod (played in Test mode).
+    pub map: Map,
     pub teams: Teams,
     pub max_players: u8,
     /// Empty: no password.
@@ -105,6 +146,7 @@ impl Default for Game {
         });
         Self {
             mode: GameMode::BattleRoyale,
+            map: Map::Island,
             teams: Teams::Squad,
             max_players: d.max_players,
             password: String::new(),
@@ -343,6 +385,18 @@ impl ServerToml {
                 "each ring must be smaller than the one before",
             ));
         }
+        if let Some(m) = g.map.client_mod()
+            && !self
+                .mods
+                .client
+                .iter()
+                .any(|c| c.split('@').next() == Some(m))
+        {
+            p.push(problem(
+                "mods.client",
+                format!("this map needs the {m} client mod for everyone; add it under Share"),
+            ));
+        }
         let r = &self.rules;
         if !(0.0..=120.0).contains(&r.respawn_delay) {
             p.push(problem("rules.respawn_delay", "0 to 120 seconds"));
@@ -394,6 +448,25 @@ impl ServerToml {
         s.loot_keep = g.loot_amount;
         s.tick_rate = g.tick_rate;
         s.voice_range = g.voice_range;
+        if g.map != Map::Island {
+            // Mod maps: Test mode at the map's own spawns; the island's loot and cars don't apply.
+            s.game_mode = 2;
+            s.test_map = Some(match g.map {
+                Map::Range => tabg_game::TestMap::Range,
+                _ => tabg_game::TestMap::DevTest,
+            });
+            s.spawn_points = g
+                .map
+                .spawns()
+                .iter()
+                .map(|&position| tabg_game::SpawnPoint {
+                    position,
+                    rotation: 0.0,
+                })
+                .collect();
+            s.loot.spots.clear();
+            s.cars.clear();
+        }
         if !self.ring.times.is_empty() {
             s.ring.ring_times.clone_from(&self.ring.times);
         }
@@ -433,6 +506,7 @@ impl ServerToml {
 fn tabg_protocol_game_mode(mode: GameMode) -> u8 {
     match mode {
         GameMode::BattleRoyale => 0,
+        GameMode::Test => 2,
     }
 }
 

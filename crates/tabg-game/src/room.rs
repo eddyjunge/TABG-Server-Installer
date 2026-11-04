@@ -42,6 +42,7 @@ use crate::rng::Rng;
 use crate::settings::{RoomSettings, SpawnPoint};
 
 mod console;
+mod maps;
 mod voice;
 pub use console::{PlayerInfo, RoomEvent};
 
@@ -266,6 +267,9 @@ impl Room {
     pub fn handle(&mut self, peer: u8, packet: &Packet) -> Vec<Outgoing> {
         if packet.code == voice::VOICE {
             return self.voice(peer, &packet.payload);
+        }
+        if matches!(packet.code, maps::RANGE | maps::DEV_TEST) {
+            return self.test_map(peer, packet.code, &packet.payload);
         }
         match packet.event() {
             Some(EventCode::RoomInit) => match RoomInitRequest::decode(&packet.payload) {
@@ -1826,6 +1830,25 @@ impl Room {
             LootWorld::spawn(&self.settings.loot, self.settings.loot_keep, &mut self.rng);
         self.modifier = modifier;
         self.loot = loot;
+        if self.settings.game_mode == tabg_protocol::messages::game_mode::TEST {
+            // Test mode: no plane and no ring; everyone plays from where they stand.
+            self.state = game_state::STARTED;
+            self.events.push(RoomEvent::MatchState {
+                state: "started".into(),
+            });
+            let mut out = vec![Self::state_changed(GameStateChanged::Started)];
+            let peers: Vec<u8> = self.players.keys().copied().collect();
+            for &peer in &peers {
+                let p = self.players.get_mut(&peer).expect("listed");
+                p.dropped = true;
+                p.landed = true;
+            }
+            for peer in peers {
+                out.extend(self.force_chunk_entry(peer));
+                out.extend(self.give_loadout(peer));
+            }
+            return out;
+        }
         let plane = Plane::take_off(self.ring.white_center, now, &mut self.rng);
         let flying = GameStateChanged::Flying {
             start: plane.start,
@@ -3304,6 +3327,72 @@ mod tests {
                 &Packet {
                     code: 240,
                     payload: vec![2, 0, 0]
+                }
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_mode_starts_without_plane_and_range_hands_out_items() {
+        let mut room = Room::new(RoomSettings {
+            game_mode: tabg_protocol::messages::game_mode::TEST,
+            test_map: Some(crate::settings::TestMap::Range),
+            respawn: Some(crate::settings::Respawn { delay: 3.0 }),
+            kills_to_win: 0,
+            countdown: 1.0,
+            players_to_start: 1,
+            loadout: vec![(6, 100)],
+            ..Default::default()
+        });
+        // The Range client says hello before RoomInit.
+        let hello = Packet {
+            code: 242,
+            payload: b"RNGE\x02\x01".to_vec(),
+        };
+        room.connect(0);
+        let out = room.handle(0, &hello);
+        assert_eq!(out[0].packet.code, 242);
+        assert_eq!(out[0].packet.payload, b"RNGE\x02\x02");
+        join(&mut room, 0, "a");
+        enter(&mut room, 0);
+        let out = run(&mut room, 0.0, 1.5);
+        assert_eq!(room.state(), game_state::STARTED);
+        let started = events(&out, EventCode::GameStateChanged);
+        assert_eq!(
+            GameStateChanged::decode(&started.last().unwrap().packet.payload).unwrap(),
+            GameStateChanged::Started
+        );
+        assert!(events(&out, EventCode::PlaneUpdate).is_empty());
+        assert_eq!(
+            events(&out, EventCode::PlayerLootRecieved).len(),
+            1,
+            "loadout at start"
+        );
+        assert!(!events(&out, EventCode::ChunkEntry).is_empty());
+        // F6 item request: into the inventory, and confirmed.
+        let mut give = b"RNGE\x02\x03".to_vec();
+        give.extend_from_slice(&160i32.to_le_bytes());
+        give.push(1);
+        let out = room.handle(
+            0,
+            &Packet {
+                code: 242,
+                payload: give,
+            },
+        );
+        assert_eq!(out[0].packet.payload, encode_player_loot(&[(160, 1)]));
+        assert_eq!(&out[1].packet.payload[..6], b"RNGE\x02\x04");
+        // One player alone doesn't end an endless respawn match.
+        run(&mut room, 1.5, 10.0);
+        assert_eq!(room.state(), game_state::STARTED);
+        // Wrong magic or a map that isn't on: ignored.
+        assert!(
+            room.handle(
+                0,
+                &Packet {
+                    code: 243,
+                    payload: b"DVTM\x01\x01".to_vec()
                 }
             )
             .is_empty()

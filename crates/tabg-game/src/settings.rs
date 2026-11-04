@@ -18,6 +18,15 @@ pub struct ForceStart {
     pub min_players: u8,
 }
 
+/// A map from the RangeMap / DevTestMap client mods (played in TABG's Test game mode).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestMap {
+    /// WilhelmTest, the shooting range.
+    Range,
+    /// The DevTest island.
+    DevTest,
+}
+
 /// Respawning instead of staying dead (deathmatch, gun game).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Respawn {
@@ -69,6 +78,8 @@ pub struct RoomSettings {
     pub respawn: Option<Respawn>,
     /// With respawns: the match ends after this many seconds (0 = no limit); most kills wins.
     pub time_limit: f32,
+    /// Range/DevTest map (needs the matching client mod and `game_mode` = Test).
+    pub test_map: Option<TestMap>,
     /// Proximity voice chat range in metres for the ProximityChat client mod (0 = off).
     pub voice_range: f32,
     /// Gun game: each kill moves the killer to the next level's items; finishing the last level
@@ -114,6 +125,7 @@ impl Default for RoomSettings {
             time_limit: 0.0,
             gun_game: Vec::new(),
             voice_range: 50.0,
+            test_map: None,
             tick_rate: 30,
             seed: 0x7ab6,
         }

@@ -7,6 +7,7 @@ gun_game = []
 
 [config.game]
 mode = "battle_royale"
+map = "island"
 teams = "squad"
 players_to_start = 2
 countdown = 20

@@ -67,6 +67,9 @@ struct Args {
     /// With --respawn: the first team to this many kills wins (0 = no limit).
     #[arg(long, default_value_t = 20)]
     kills_to_win: u16,
+    /// Play a client-mod map in Test mode: `range` or `dev-test` (sets its spawn points).
+    #[arg(long)]
+    test_map: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -196,6 +199,35 @@ fn main() {
             version: app_version.clone(),
         }
     });
+
+    match args.test_map.as_deref() {
+        None => {}
+        Some(name) => {
+            let (map, spawns): (tabg_game::TestMap, &[[f32; 3]]) = match name {
+                "range" => (tabg_game::TestMap::Range, &[[6.32, 117.10, -25.41]]),
+                "dev-test" => (
+                    tabg_game::TestMap::DevTest,
+                    &[
+                        [-37.0, 111.0, -11.0],
+                        [6.0, 112.0, 21.0],
+                        [-2.0, 111.0, 2.0],
+                    ],
+                ),
+                other => fail(format!("unknown test map {other:?} (range, dev-test)")),
+            };
+            settings.game_mode = 2;
+            settings.test_map = Some(map);
+            settings.spawn_points = spawns
+                .iter()
+                .map(|&position| SpawnPoint {
+                    position,
+                    rotation: 0.0,
+                })
+                .collect();
+            settings.loot.spots.clear();
+            settings.cars.clear();
+        }
+    }
 
     let stop = Arc::new(AtomicBool::new(false));
     {

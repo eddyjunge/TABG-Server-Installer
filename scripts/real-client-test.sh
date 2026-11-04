@@ -8,6 +8,7 @@
 #   TABG_CLIENT_DIR   modded client with BepInEx (source of the test copy)
 #   TABG_TEST_CLIENT  where the test copy lives (default ~/.local/share/tabg/test-client)
 #   TABG_WORLD        world file for the server (default target/tabg-world.json)
+#   TABG_TEST_PLUGINS extra client plugin DLLs to install (space-separated paths)
 #   TABG_TEST_SERVER_ARGS extra tabg-server flags (e.g. "--loadout 160:1,6:240")
 #   TABG_TEST_RELAY=1 host through Unity Relay and join by code (needs internet) instead of 127.0.0.1
 set -euo pipefail
@@ -36,6 +37,7 @@ rm -rf "$TEST/BepInEx/plugins" "$TEST/BepInEx/config" "$TEST/BepInEx/LogOutput.l
 mkdir -p "$TEST/BepInEx/plugins"
 [[ -e "$SRC/BepInEx/plugins/AntiCheatBootErrorRemover.dll" ]] && cp "$SRC/BepInEx/plugins/AntiCheatBootErrorRemover.dll" "$TEST/BepInEx/plugins/"
 cp mods/src/DevAutoJoin/bin/Release/netstandard2.0/Tabg.DevAutoJoin.dll "$TEST/BepInEx/plugins/"
+for p in ${TABG_TEST_PLUGINS:-}; do cp "$p" "$TEST/BepInEx/plugins/"; done
 
 # A previous game instance that is still shutting down makes the next one hang at startup.
 for _ in $(seq 1 60); do pgrep -x TotallyAccurate >/dev/null || break; sleep 1; done

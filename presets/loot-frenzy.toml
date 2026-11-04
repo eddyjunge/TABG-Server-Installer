@@ -7,6 +7,7 @@ gun_game = []
 
 [config.game]
 mode = "battle_royale"
+map = "island"
 loot_amount = 0.4
 
 [config]

@@ -10,7 +10,7 @@ use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use tabg_host::apply::{self, Applied, ApplyError};
-use tabg_host::config::{NetMode, Teams};
+use tabg_host::config::{GameMode, Map, NetMode, Teams};
 use tabg_host::supervisor::{HostStatus, LogLine, RunState};
 use tabg_host::{ServerToml, backup, presets};
 
@@ -630,6 +630,15 @@ fn settings_from_form(
     parse(f, "port", &mut c.network.port)?;
     c.network.upnp = f.contains_key("upnp");
     c.network.public = f.contains_key("public");
+    c.game.mode = match f.get("game_mode").map(String::as_str) {
+        Some("test") => GameMode::Test,
+        _ => GameMode::BattleRoyale,
+    };
+    c.game.map = match f.get("map").map(String::as_str) {
+        Some("range") => Map::Range,
+        Some("dev_test") => Map::DevTest,
+        _ => Map::Island,
+    };
     c.game.teams = match f.get("teams").map(String::as_str) {
         Some("solo") => Teams::Solo,
         Some("duo") => Teams::Duo,
