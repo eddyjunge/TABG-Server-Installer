@@ -1,5 +1,9 @@
 use std::collections::BTreeMap;
 
+use tabg_protocol::combat::{
+    DamageEvent, PlayerDamaged, PlayerDead, PlayerFireHeader, ReviveRequest, ReviveStage, TeamDead,
+    encode_revive_state, firing_mode,
+};
 use tabg_protocol::match_flow::{
     GameStateChanged, PlayerAirplaneDropped, RequestAirplaneDrop, RingUpdate, encode_all_drop,
     encode_plane_update,
@@ -12,6 +16,9 @@ use tabg_protocol::messages::{
 use tabg_protocol::{EventCode, Packet};
 
 use crate::plane::{self, Plane};
+
+/// "No player" in TABG's byte player fields.
+const NOBODY: u8 = u8::MAX;
 use crate::ring::{Ring, RingEvent};
 use crate::rng::Rng;
 use crate::settings::{RoomSettings, SpawnPoint};
@@ -66,6 +73,13 @@ struct Player {
     dropped: bool,
     landed: bool,
     alive: bool,
+    health: f32,
+    downed: bool,
+    /// When the player went down (damage within 1 s of that is ignored).
+    down_time: f32,
+    /// 255 = nobody.
+    last_attacker: u8,
+    kills: u16,
 }
 
 /// One TABG match.
@@ -173,6 +187,45 @@ impl Room {
                 }
             }
             // Landing after skydiving: remembered and relayed unchanged, like the official server.
+            Some(EventCode::DamageEvent) => match DamageEvent::decode(&packet.payload) {
+                Ok(ev) => self.damage(peer, ev),
+                Err(_) => Vec::new(),
+            },
+            // The client reports its own death (falling, …) or a death by the ring: `[player index]`.
+            Some(EventCode::PlayerDead) | Some(EventCode::RingDeath)
+                if packet.payload.first() == Some(&peer) =>
+            {
+                let ring_death = packet.event() == Some(EventCode::RingDeath);
+                self.kill(peer, ring_death)
+            }
+            Some(EventCode::ReviveState) => match ReviveRequest::decode(&packet.payload) {
+                Ok(req) => self.revive(peer, req),
+                Err(_) => Vec::new(),
+            },
+            Some(EventCode::PlayerFire) => self.player_fire(peer, packet),
+            // Simple relays: the first byte names the player, which must be the sender.
+            Some(
+                event @ (EventCode::WeaponChange | EventCode::GearChange | EventCode::PlayerEffect),
+            ) => {
+                let relayed = match event {
+                    EventCode::WeaponChange => EventCode::WeaponChanged,
+                    other => other,
+                };
+                self.relay_from(peer, packet, relayed, Recipients::All)
+            }
+            Some(EventCode::PlayerState) => {
+                self.relay_from(peer, packet, EventCode::PlayerStateChanged, Recipients::All)
+            }
+            Some(EventCode::PlayerMarkerAdded) => {
+                if self.players.contains_key(&peer) {
+                    vec![Self::broadcast(
+                        EventCode::PlayerMarkerEvent,
+                        packet.payload.clone(),
+                    )]
+                } else {
+                    Vec::new()
+                }
+            }
             Some(EventCode::PlayerLand) => match self.players.get_mut(&peer) {
                 Some(p) if p.dropped && !p.landed => {
                     p.landed = true;
@@ -265,6 +318,11 @@ impl Room {
                 dropped: true,
                 landed: true,
                 alive: true,
+                health: 100.0,
+                downed: false,
+                down_time: 0.0,
+                last_attacker: NOBODY,
+                kills: 0,
             },
         );
 
@@ -436,6 +494,199 @@ impl Room {
         )]
     }
 
+    /// Forward a packet whose first byte is the sending player's index, unchanged.
+    fn relay_from(
+        &self,
+        peer: u8,
+        packet: &Packet,
+        event: EventCode,
+        to: Recipients,
+    ) -> Vec<Outgoing> {
+        if !self.players.contains_key(&peer) || packet.payload.first() != Some(&peer) {
+            return Vec::new();
+        }
+        vec![Outgoing::reliable(to, event, packet.payload.clone())]
+    }
+
+    /// `PlayerFire`: relayed to everyone else; a sync reply goes back to the shooter if asked.
+    fn player_fire(&self, peer: u8, packet: &Packet) -> Vec<Outgoing> {
+        let Ok(header) = PlayerFireHeader::decode(&packet.payload) else {
+            return Vec::new();
+        };
+        if header.player_index != peer || !self.players.get(&peer).is_some_and(|p| p.alive) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if header.mode & firing_mode::WANTS_TO_BE_SYNCED != 0 {
+            if let Some(reply) = PlayerFireHeader::sync_return(&packet.payload) {
+                out.push(Outgoing::reliable(
+                    Recipients::One(peer),
+                    EventCode::PlayerFireSyncReturn,
+                    reply,
+                ));
+            }
+        }
+        out.push(Outgoing::reliable(
+            Recipients::AllExcept(peer),
+            EventCode::PlayerFire,
+            packet.payload.clone(),
+        ));
+        out
+    }
+
+    /// `DamageEvent`, following the official rules: only during the match, only between players
+    /// who left the plane, a short grace period right after going down, and reduced damage while
+    /// downed. Reaching 0 health downs a player first; a downed player at 0 dies.
+    fn damage(&mut self, peer: u8, ev: DamageEvent) -> Vec<Outgoing> {
+        let now = self.last_now.unwrap_or(0.0);
+        if self.state != game_state::STARTED
+            || (peer != ev.attacker && peer != ev.victim)
+            || !ev.new_health.is_finite()
+        {
+            return Vec::new();
+        }
+        let attacker_ok = self.players.get(&ev.attacker).is_some_and(|a| a.dropped);
+        let Some(victim) = self.players.get_mut(&ev.victim) else {
+            return Vec::new();
+        };
+        if !attacker_ok
+            || !victim.dropped
+            || !victim.alive
+            || (victim.downed && now - victim.down_time < 1.0)
+        {
+            return Vec::new();
+        }
+        let mut dmg = (victim.health - ev.new_health).max(0.0);
+        if victim.downed {
+            dmg = dmg.clamp(0.0, 50.0) * 0.12;
+        }
+        victim.health -= dmg;
+        if !victim.downed {
+            victim.last_attacker = ev.attacker;
+        }
+        let damaged = PlayerDamaged {
+            victim: ev.victim,
+            attacker: ev.attacker,
+            health: victim.health,
+            downed: victim.downed,
+            damaged: dmg != 0.0,
+            direction: PackedDirection::pack(ev.direction),
+            hit: ev.hit.clone(),
+        };
+        let to = if peer != ev.attacker && ev.exclude_victim {
+            Recipients::AllExcept(ev.victim)
+        } else {
+            Recipients::All
+        };
+        let damaged = Outgoing::reliable(to, EventCode::PlayerDamaged, damaged.encode());
+
+        if victim.health > 0.0 {
+            return vec![damaged];
+        }
+        if victim.downed {
+            return self.kill(ev.victim, false);
+        }
+        // Down instead of dead…
+        victim.downed = true;
+        victim.health = 100.0;
+        victim.down_time = now;
+        let group = victim.group;
+        // …unless the whole team is now down or dead: then everyone in it dies.
+        let team_down = self
+            .players
+            .values()
+            .filter(|p| p.group == group)
+            .all(|p| !p.alive || p.downed);
+        if !team_down {
+            return vec![damaged];
+        }
+        let members: Vec<u8> = self
+            .players
+            .values()
+            .filter(|p| p.group == group && p.alive)
+            .map(|p| p.index)
+            .collect();
+        members
+            .into_iter()
+            .flat_map(|m| self.kill(m, false))
+            .collect()
+    }
+
+    /// Kill a player: `PlayerDead` to everyone, and `TeamDead` with the placement when that was
+    /// the team's last player.
+    fn kill(&mut self, victim: u8, ring_death: bool) -> Vec<Outgoing> {
+        if self.state != game_state::STARTED {
+            return Vec::new();
+        }
+        let Some(p) = self.players.get_mut(&victim) else {
+            return Vec::new();
+        };
+        if !p.alive {
+            return Vec::new();
+        }
+        p.alive = false;
+        p.downed = false;
+        p.health = 0.0;
+        let (group, last_attacker, name) = (p.group, p.last_attacker, p.name.clone());
+        if let Some(killer) = self
+            .players
+            .get_mut(&last_attacker)
+            .filter(|k| k.group != group)
+        {
+            killer.kills += 1;
+        }
+        let spectate = self
+            .players
+            .values()
+            .find(|m| m.group == group && m.alive && m.index != victim)
+            .map_or(NOBODY, |m| m.index);
+        let dead = PlayerDead {
+            victim,
+            last_attacker,
+            spectate,
+            victim_name: name,
+            killer_weapon: NO_WEAPON,
+            ring_death,
+        };
+        let mut out = vec![Self::broadcast(EventCode::PlayerDead, dead.encode())];
+        if !self.players.values().any(|m| m.group == group && m.alive) {
+            let placement = u8::try_from(self.alive_teams().len() + 1).unwrap_or(u8::MAX);
+            out.push(Self::broadcast(
+                EventCode::TeamDead,
+                TeamDead {
+                    group,
+                    placement,
+                    finished: Vec::new(),
+                }
+                .encode(),
+            ));
+        }
+        out
+    }
+
+    /// `ReviveState`: a teammate starts, stops or finishes reviving a downed player.
+    fn revive(&mut self, peer: u8, req: ReviveRequest) -> Vec<Outgoing> {
+        if req.reviver != peer {
+            return Vec::new();
+        }
+        let reviver_group = match self.players.get(&req.reviver) {
+            Some(r) if r.alive && !r.downed => r.group,
+            _ => return Vec::new(),
+        };
+        let Some(target) = self.players.get_mut(&req.revived) else {
+            return Vec::new();
+        };
+        if !target.alive || !target.downed || target.group != reviver_group {
+            return Vec::new();
+        }
+        if req.stage == ReviveStage::Finished {
+            target.downed = false;
+            target.health = 15.0;
+        }
+        let payload = encode_revive_state(req.stage, req.revived, req.reviver, target.health);
+        vec![Self::broadcast(EventCode::ReviveState, payload)]
+    }
+
     fn broadcast(event: EventCode, payload: Vec<u8>) -> Outgoing {
         Outgoing::reliable(Recipients::All, event, payload)
     }
@@ -564,6 +815,10 @@ impl Room {
             p.dropped = false;
             p.landed = false;
             p.alive = true;
+            p.health = 100.0;
+            p.downed = false;
+            p.last_attacker = NOBODY;
+            p.kills = 0;
         }
         let plane = Plane::take_off(self.ring.white_center, now, &mut self.rng);
         let flying = GameStateChanged::Flying {
@@ -673,6 +928,7 @@ fn clean_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tabg_protocol::combat::{DamageEvent, PlayerDamaged, PlayerDead, TeamDead};
     use tabg_protocol::match_flow::{GameStateChanged, PlayerAirplaneDropped, RingUpdate};
     use tabg_protocol::messages::{EntityBody, game_mode};
 
@@ -1080,5 +1336,193 @@ mod tests {
         join(&mut room, 1, "b");
         run(&mut room, 40.1, 40.2);
         assert_eq!(room.state(), game_state::COUNT_DOWN);
+    }
+
+    /// A started match where every player in `peers` has jumped. Squads via `squad`.
+    fn fight_room(players: &[(u8, u64)]) -> Room {
+        let mut room = Room::new(RoomSettings {
+            countdown: 1.0,
+            players_to_start: players.len() as u8,
+            ..Default::default()
+        });
+        for &(peer, squad) in players {
+            room.connect(peer);
+            let req = RoomInitRequest {
+                player_name: format!("p{peer}"),
+                squad_id: squad,
+                ..Default::default()
+            };
+            room.handle(peer, &Packet::new(EventCode::RoomInit, req.encode()));
+            enter(&mut room, peer);
+        }
+        run(&mut room, 0.0, 1.5);
+        assert_eq!(room.state(), game_state::STARTED);
+        for &(peer, _) in players {
+            let req = RequestAirplaneDrop {
+                player_index: peer,
+                direction: [0.0, -1.0, 0.0],
+            };
+            room.handle(
+                peer,
+                &Packet::new(EventCode::RequestAirplaneDrop, req.encode()),
+            );
+        }
+        room
+    }
+
+    fn hit(room: &mut Room, attacker: u8, victim: u8, new_health: f32) -> Vec<Outgoing> {
+        let ev = DamageEvent {
+            attacker,
+            victim,
+            new_health,
+            direction: [0.0, 0.0, 1.0],
+            hit: None,
+            exclude_victim: false,
+        };
+        room.handle(attacker, &Packet::new(EventCode::DamageEvent, ev.encode()))
+    }
+
+    #[test]
+    fn damage_needs_a_started_match() {
+        let mut room = Room::new(lobby());
+        join(&mut room, 0, "a");
+        join(&mut room, 1, "b");
+        assert!(hit(&mut room, 0, 1, 10.0).is_empty());
+    }
+
+    #[test]
+    fn damage_is_applied_and_broadcast() {
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        let out = hit(&mut room, 0, 1, 60.0);
+        let d = PlayerDamaged::decode(&out[0].packet.payload).unwrap();
+        assert_eq!(
+            (d.victim, d.attacker, d.health, d.downed, d.damaged),
+            (1, 0, 60.0, false, true)
+        );
+        // Only the attacker or victim may report it.
+        let ev = DamageEvent {
+            attacker: 0,
+            victim: 1,
+            new_health: 0.0,
+            direction: [0.0; 3],
+            hit: None,
+            exclude_victim: false,
+        };
+        assert!(
+            room.handle(2, &Packet::new(EventCode::DamageEvent, ev.encode()))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn solo_player_at_zero_is_downed_team_and_dies() {
+        // Solo team: going down means the whole team is down, so the player dies right away.
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        let out = hit(&mut room, 0, 1, 0.0);
+        let dead =
+            PlayerDead::decode(&events(&out, EventCode::PlayerDead)[0].packet.payload).unwrap();
+        assert_eq!(
+            (dead.victim, dead.last_attacker, dead.spectate),
+            (1, 0, NOBODY)
+        );
+        let team = TeamDead::decode(&events(&out, EventCode::TeamDead)[0].packet.payload).unwrap();
+        assert_eq!((team.group, team.placement), (1, 2));
+        let ended = run(&mut room, 1.6, 1.7);
+        let end = GameStateChanged::decode(
+            &events(&ended, EventCode::GameStateChanged)[0]
+                .packet
+                .payload,
+        )
+        .unwrap();
+        assert_eq!(end, GameStateChanged::Ended { winner: 0 });
+    }
+
+    #[test]
+    fn squad_member_goes_down_takes_reduced_damage_and_can_be_revived() {
+        // 0 and 1 are a squad, 2 is alone.
+        let mut room = fight_room(&[(0, 7), (1, 7), (2, 9)]);
+        let out = hit(&mut room, 2, 0, -5.0);
+        assert!(
+            events(&out, EventCode::PlayerDead).is_empty(),
+            "downed, not dead"
+        );
+        // Within a second of going down, hits are ignored.
+        assert!(hit(&mut room, 2, 0, 0.0).is_empty());
+        run(&mut room, 1.6, 3.0);
+        // Downed damage is capped at 50 and scaled by 0.12: 100 -> 94.
+        let d = PlayerDamaged::decode(&hit(&mut room, 2, 0, 0.0)[0].packet.payload).unwrap();
+        assert!(d.downed && (d.health - 94.0).abs() < 1e-3, "{d:?}");
+
+        // The teammate revives them to 15 health.
+        let req = ReviveRequest {
+            stage: ReviveStage::Finished,
+            reviver: 1,
+            revived: 0,
+        };
+        let out = room.handle(1, &Packet::new(EventCode::ReviveState, req.encode()));
+        assert_eq!(
+            out[0].packet.payload[..3],
+            [ReviveStage::Finished as u8, 0, 1]
+        );
+        let d = PlayerDamaged::decode(&hit(&mut room, 2, 0, 10.0)[0].packet.payload).unwrap();
+        assert_eq!((d.downed, d.health), (false, 10.0));
+        // An enemy can't "revive".
+        let fake = ReviveRequest {
+            stage: ReviveStage::Finished,
+            reviver: 2,
+            revived: 0,
+        };
+        assert!(
+            room.handle(2, &Packet::new(EventCode::ReviveState, fake.encode()))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn whole_squad_down_means_everyone_dies() {
+        let mut room = fight_room(&[(0, 7), (1, 7), (2, 9)]);
+        hit(&mut room, 2, 0, 0.0);
+        let out = hit(&mut room, 2, 1, 0.0);
+        assert_eq!(events(&out, EventCode::PlayerDead).len(), 2);
+        assert_eq!(events(&out, EventCode::TeamDead).len(), 1);
+    }
+
+    #[test]
+    fn ring_and_fall_deaths_are_self_reported_only() {
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        assert!(
+            room.handle(0, &Packet::new(EventCode::RingDeath, vec![1]))
+                .is_empty(),
+            "can't report others"
+        );
+        let out = room.handle(1, &Packet::new(EventCode::RingDeath, vec![1]));
+        assert!(
+            PlayerDead::decode(&events(&out, EventCode::PlayerDead)[0].packet.payload)
+                .unwrap()
+                .ring_death
+        );
+    }
+
+    #[test]
+    fn fire_is_relayed_to_others_and_synced_back() {
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        let mut fire = vec![0, tabg_protocol::combat::firing_mode::WANTS_TO_BE_SYNCED];
+        fire.extend(5i32.to_le_bytes());
+        fire.extend(42i32.to_le_bytes());
+        let out = room.handle(0, &Packet::new(EventCode::PlayerFire, fire.clone()));
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            (out[0].to.clone(), out[0].packet.event()),
+            (Recipients::One(0), Some(EventCode::PlayerFireSyncReturn))
+        );
+        assert_eq!(
+            (out[1].to.clone(), out[1].packet.payload.clone()),
+            (Recipients::AllExcept(0), fire.clone())
+        );
+        // Someone else's fire packet from player 1 is dropped.
+        assert!(
+            room.handle(1, &Packet::new(EventCode::PlayerFire, fire))
+                .is_empty()
+        );
     }
 }

@@ -27,6 +27,12 @@ struct Args {
     /// Radius of the circle, in metres.
     #[arg(long, default_value_t = 1.0)]
     radius: f32,
+    /// Attack this player index: after --hit-at seconds, report a hit that leaves them at 40
+    /// health, and 8 s later a lethal one (exercises damage, death and the end of the match).
+    #[arg(long)]
+    hit_player: Option<u8>,
+    #[arg(long, default_value_t = 60.0)]
+    hit_at: f32,
 }
 
 fn parse_vec3(s: &str) -> Result<[f32; 3], String> {
@@ -66,6 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(probe.seen.world.as_ref().map(|w| w.position));
     let deadline = std::time::Instant::now() + Duration::from_secs_f32(args.seconds);
     let mut t = 0.0f32;
+    let mut hits_sent = 0;
     while std::time::Instant::now() < deadline && !probe.seen.disconnected {
         if let Some(p) = start {
             t += 0.033;
@@ -74,6 +81,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 p[1],
                 p[2] + args.radius * t.cos(),
             ])?;
+        }
+        if let Some(victim) = args.hit_player {
+            let elapsed = args.seconds
+                - deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_secs_f32();
+            for (i, (at, health)) in [(args.hit_at, 40.0), (args.hit_at + 8.0, 0.0)]
+                .into_iter()
+                .enumerate()
+            {
+                if hits_sent == i && elapsed >= at {
+                    probe.hit(victim, health)?;
+                    println!("hit player {victim} -> {health} at {elapsed:.1}s");
+                    hits_sent += 1;
+                }
+            }
         }
         probe.pump(Duration::from_millis(33))?;
     }

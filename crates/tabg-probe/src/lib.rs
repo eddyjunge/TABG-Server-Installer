@@ -122,6 +122,22 @@ impl Probe {
         self.send(EventCode::PlayerUpdate, up.encode(), false)
     }
 
+    /// Report that we hit `victim`, leaving them at `new_health`.
+    pub fn hit(&mut self, victim: u8, new_health: f32) -> Result<(), NetError> {
+        let Some(attacker) = self.player_index() else {
+            return Ok(());
+        };
+        let ev = tabg_protocol::combat::DamageEvent {
+            attacker,
+            victim,
+            new_health,
+            direction: [0.0, 0.0, 1.0],
+            hit: None,
+            exclude_victim: false,
+        };
+        self.send(EventCode::DamageEvent, ev.encode(), true)
+    }
+
     /// Process network events for up to `budget`.
     pub fn pump(&mut self, budget: Duration) -> Result<(), NetError> {
         let deadline = Instant::now() + budget;

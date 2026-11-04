@@ -8,6 +8,7 @@
 //! talk to our server. Field comments say which side sends a message.
 
 pub mod codec;
+pub mod combat;
 pub mod event;
 pub mod match_flow;
 pub mod messages;

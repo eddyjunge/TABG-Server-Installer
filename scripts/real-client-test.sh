@@ -57,7 +57,7 @@ CLIENT=$!
 BOT_AT=${TABG_TEST_BOT_AT--414.9,167.13,-498.1}
 if [[ -n "$BOT_AT" ]]; then
   cargo build -q --release -p tabg-probe
-  ( sleep 45; exec ./target/release/tabg-probe --port 7777 --name tabg-bot --around "$BOT_AT" --radius 2 --seconds $((SECONDS_TO_RUN - 55)) > "$OUT/bot.log" 2>&1 ) &
+  ( sleep 45; exec ./target/release/tabg-probe --port 7777 --name tabg-bot --around "$BOT_AT" --radius 2 --seconds $((SECONDS_TO_RUN - 55)) ${TABG_TEST_BOT_ARGS:-} > "$OUT/bot.log" 2>&1 ) &
 fi
 sleep "$SECONDS_TO_RUN"
 pkill -f "$TEST/TotallyAccurateBattlegrounds.exe" 2>/dev/null || true
