@@ -110,6 +110,10 @@ pub struct Car {
 pub struct World {
     pub format: u32,
     pub unity_version: String,
+    /// TABG's `ServerConnector.APP_VERSION`; the server list only shows servers with the
+    /// player's version. Missing in older dumps.
+    #[serde(default)]
+    pub app_version: String,
     pub scenes: Vec<String>,
     pub spawn_points: Vec<SpawnPoint>,
     /// Missing in dumps made before the dumper exported it.

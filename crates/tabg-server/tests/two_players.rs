@@ -22,6 +22,8 @@ fn two_probes_join_and_see_each_other_move() {
             bind: "127.0.0.1".into(),
             port,
             relay: None,
+            listing: None,
+            upnp: false,
             settings: RoomSettings {
                 spawn_points: vec![spawn],
                 ..Default::default()

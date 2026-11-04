@@ -16,6 +16,11 @@ tabg-world = { path = "../tabg-world" }
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = { version = "3.5.1", features = ["json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+igd-next = "0.17.1"
+ctrlc = "3.5.2"
 
 [dev-dependencies]
 tabg-probe = { path = "../tabg-probe" }

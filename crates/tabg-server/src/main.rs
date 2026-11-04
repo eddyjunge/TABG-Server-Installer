@@ -46,6 +46,18 @@ struct Args {
     /// A TABG install (client or dedicated server) to read the Unity project id from.
     #[arg(long, env = "TABG_CLIENT_DIR")]
     game_dir: Option<std::path::PathBuf>,
+    /// Show the server in TABG's community server browser (needs --world for the game version).
+    #[arg(long)]
+    list: bool,
+    /// Server name in the browser.
+    #[arg(long, default_value = "tabg server")]
+    name: String,
+    /// Server description in the browser.
+    #[arg(long, default_value = "")]
+    description: String,
+    /// Direct mode: open the port on the router with UPnP.
+    #[arg(long)]
+    upnp: bool,
 }
 
 /// Used when neither --world nor --spawn is given: one lobby spawn of the default map, as seen from
@@ -77,6 +89,7 @@ fn main() {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(1, |d| d.as_nanos() as u64)
     });
+    let mut app_version = String::new();
     let mut settings = RoomSettings {
         max_players: args.max_players,
         password: args.password,
@@ -93,6 +106,7 @@ fn main() {
 
     if let Some(path) = &args.world {
         let world = tabg_world::World::load(path).unwrap_or_else(|e| fail(e));
+        app_version.clone_from(&world.app_version);
         let lobby: Vec<_> = world
             .spawn_group(tabg_world::LOBBY_GROUP)
             .map(|p| SpawnPoint {
@@ -208,12 +222,32 @@ fn main() {
         None
     };
 
+    let listing = args.list.then(|| {
+        if app_version.is_empty() {
+            fail(
+                "--list needs the game version from a --world dump (re-run scripts/dump-world.sh)",
+            );
+        }
+        tabg_server::listing::ListingConfig {
+            name: args.name.clone(),
+            description: args.description.clone(),
+            version: app_version.clone(),
+        }
+    });
+
     let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        // Stop cleanly on Ctrl-C so the UPnP mapping is removed.
+        let _ = ctrlc::set_handler(move || stop.store(true, std::sync::atomic::Ordering::Relaxed));
+    }
     if let Err(e) = run(
         ServerConfig {
             bind: args.bind,
             port: args.port,
             relay,
+            listing,
+            upnp: args.upnp,
             settings,
         },
         stop,

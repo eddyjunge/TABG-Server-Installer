@@ -75,6 +75,8 @@ namespace Tabg.WorldDumper
             var sb = new StringBuilder();
             sb.Append("{\n  \"format\": 1,\n");
             sb.Append("  \"unity_version\": ").Append(Quote(Application.unityVersion)).Append(",\n");
+            // The game version the community server list filters on (changes with every update).
+            sb.Append("  \"app_version\": ").Append(Quote(Landfall.Network.ServerConnector.APP_VERSION)).Append(",\n");
             sb.Append("  \"scenes\": [");
             sb.Append(string.Join(", ", Enumerable.Range(0, SceneManager.sceneCount).Select(i => Quote(SceneManager.GetSceneAt(i).name))));
             sb.Append("],\n  \"spawn_points\": [\n");
