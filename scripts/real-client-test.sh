@@ -48,7 +48,7 @@ trap 'kill $SERVER 2>/dev/null || true' EXIT
   cd "$TEST"
   export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/823130"
   export STEAM_COMPAT_APP_ID=823130 SteamAppId=823130 SteamGameId=823130
-  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN=127.0.0.1:7777 TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20))
+  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN=127.0.0.1:7777 TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}"
   exec "$PROTON" run "$TEST/TotallyAccurateBattlegrounds.exe" > "$PWD/../client-proton.log" 2>&1
 ) &
 CLIENT=$!

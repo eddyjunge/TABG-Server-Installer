@@ -69,6 +69,9 @@ pub fn run(config: ServerConfig, stop: Arc<AtomicBool>) -> Result<(), NetError> 
         }
         let out = room.tick(started.elapsed().as_secs_f32());
         send_all(&mut host, &room, out);
+        for peer in room.take_disconnects() {
+            host.disconnect(u32::from(peer));
+        }
         host.flush();
     }
     info!("server stopped");
@@ -77,6 +80,12 @@ pub fn run(config: ServerConfig, stop: Arc<AtomicBool>) -> Result<(), NetError> 
 
 fn send_all(host: &mut Host, room: &Room, out: Vec<Outgoing>) {
     for o in out {
+        if !matches!(
+            o.packet.event(),
+            Some(tabg_protocol::EventCode::PlayerUpdate | tabg_protocol::EventCode::PingRecieved)
+        ) {
+            debug!(to = ?o.to, event = ?o.packet.event(), len = o.packet.payload.len(), "send");
+        }
         let wire = o.packet.to_wire();
         let targets: Vec<u8> = match o.to {
             Recipients::One(p) => vec![p],

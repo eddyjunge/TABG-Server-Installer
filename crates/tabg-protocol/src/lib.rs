@@ -9,6 +9,7 @@
 
 pub mod codec;
 pub mod event;
+pub mod match_flow;
 pub mod messages;
 
 pub use codec::{DecodeError, Reader, Writer};

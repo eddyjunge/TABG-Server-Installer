@@ -1,5 +1,7 @@
 using System;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
@@ -15,6 +17,7 @@ namespace Tabg.DevAutoJoin
     ///
     ///   TABG_AUTOJOIN        "ip:port" to join once the main menu is up
     ///   TABG_AUTOJOIN_QUIT   seconds after joining to quit the game (default: never)
+    ///   TABG_AUTOJOIN_SHOTS  comma-separated seconds after joining to take screenshots
     ///
     /// Logs scene changes, every event the client receives, and the local player's position, and
     /// saves screenshots to BepInEx/autojoin-*.png.
@@ -29,7 +32,7 @@ namespace Tabg.DevAutoJoin
         private float _sinceJoin = -1f;
         private float _nextStatus;
         private int _shot;
-        private static readonly float[] ShotTimes = { 10f, 30f, 50f, 60f, 70f, 85f };
+        private float[] _shotTimes = { 10f, 30f, 50f, 60f, 70f, 85f };
 
         private void Awake()
         {
@@ -45,6 +48,12 @@ namespace Tabg.DevAutoJoin
             if (float.TryParse(Environment.GetEnvironmentVariable("TABG_AUTOJOIN_QUIT"), out float quit))
             {
                 _quitAfter = quit;
+            }
+
+            string shots = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_SHOTS");
+            if (!string.IsNullOrEmpty(shots))
+            {
+                _shotTimes = shots.Split(',').Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
             }
 
             SceneManager.sceneLoaded += (scene, mode) => Logger.LogInfo($"scene loaded: {scene.name} ({mode})");
@@ -78,7 +87,7 @@ namespace Tabg.DevAutoJoin
             }
 
             _sinceJoin += dt;
-            if (_shot < ShotTimes.Length && _sinceJoin >= ShotTimes[_shot])
+            if (_shot < _shotTimes.Length && _sinceJoin >= _shotTimes[_shot])
             {
                 string path = Path.Combine(Paths.BepInExRootPath, $"autojoin-{_shot}.png");
                 ScreenCapture.CaptureScreenshot(path);

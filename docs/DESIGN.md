@@ -240,6 +240,8 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
   - Joining before the client's Epic login completes fails with "Failed generating token" (the client fetches an EOS id token right after the ENet connect).
 - **M2 – Join codes.** UGS sign-in, relay allocation, Unity Transport, server-list heartbeat, UPnP fallback.
 - **M3 – Battle Royale playable.** Loot, inventory, weapons, damage, death/revive, ring, plane drop, cars, match flow, win.
+  - ~~Match flow.~~ Done 2026-11-04: countdown (players-to-start, timed force start), plane (45 s path through the first ring, 5 s progress sync, jump requests, auto-drop), landing relay, ring cycle with the map's `ring_times` (dumped), last-team-standing win, refusal of late joiners, restart after the end. In the real client: "GAME STARTS IN 3", plane ride, jump, landing, "RING PROGRESS 44 %".
+  - Next: damage and death (`DamageEvent`, `PlayerDamaged`, `PlayerDead`, `RingDeath`, downed/revive), then loot via chunks and weapons, then cars.
 - **M4 – tabg v1.** Dashboard, settings and presets, players/admins/console, loadout & ring editor, crash recovery, backups, share/join with client sync, Windows + Linux builds.
 - **M5 – Modes & extras.** Brawl, Gun Game, Bomb, Deception, Test; MatchCore rules; proximity chat relay; Range/DevTest; skins (opt-in); radar.
 - **M6 – Bots & vehicles.** Navmesh bots (FakePlayers successor) and vehicle/FPV rules.

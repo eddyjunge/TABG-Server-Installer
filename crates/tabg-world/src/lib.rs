@@ -33,12 +33,28 @@ pub struct SpawnPoint {
     pub rotation: f32,
 }
 
+/// The map's ring prefab settings.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct RingData {
+    /// Pause after ring `i` finishes shrinking (the server adds 20 s, and 40 s more after ring 1).
+    pub ring_times: Vec<f32>,
+    /// Size of the blue ring before the first shrink.
+    pub start_blue_size: f32,
+    pub base_time_to_travel: f32,
+    /// Preferred ring centres for late rings (empty on maps without hot spots).
+    #[serde(default)]
+    pub hot_spots: Vec<[f32; 3]>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct World {
     pub format: u32,
     pub unity_version: String,
     pub scenes: Vec<String>,
     pub spawn_points: Vec<SpawnPoint>,
+    /// Missing in dumps made before the dumper exported it.
+    #[serde(default)]
+    pub ring: Option<RingData>,
 }
 
 impl World {
@@ -74,7 +90,8 @@ mod tests {
   "spawn_points": [
     {"group": 0, "position": [1.5, 2, -3], "rotation": 90},
     {"group": 3, "position": [0, 0, 0], "rotation": 0}
-  ]
+  ],
+  "ring": {"ring_times": [40, 40, 30], "start_blue_size": 9000, "base_time_to_travel": 200, "hot_spots": []}
 }"#;
 
     #[test]
@@ -90,6 +107,7 @@ mod tests {
                 rotation: 90.0
             }]
         );
+        assert_eq!(world.ring.unwrap().ring_times, [40.0, 40.0, 30.0]);
     }
 
     #[test]

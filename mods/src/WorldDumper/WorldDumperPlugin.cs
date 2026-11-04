@@ -89,8 +89,33 @@ namespace Tabg.WorldDumper
                   .Append(i + 1 < ordered.Length ? ",\n" : "\n");
             }
 
-            sb.Append("  ]\n}\n");
+            sb.Append("  ],\n");
+            AppendRing(sb);
+            sb.Append("}\n");
             return sb.ToString();
+        }
+
+        /// <summary>The ring prefab's timing and the map's ring hot spots (null if no ring exists).</summary>
+        private static void AppendRing(StringBuilder sb)
+        {
+            TheRing ring = TheRing.Instance != null ? TheRing.Instance : FindObjectOfType<TheRing>();
+            if (ring == null)
+            {
+                sb.Append("  \"ring\": null\n");
+                return;
+            }
+
+            sb.Append("  \"ring\": {\n");
+            sb.Append("    \"ring_times\": [").Append(string.Join(", ", (ring.ringTimes ?? new float[0]).Select(F))).Append("],\n");
+            sb.Append("    \"start_blue_size\": ").Append(F(ring.blue != null ? ring.blue.localScale.x : ring.currentBlueSize)).Append(",\n");
+            sb.Append("    \"base_time_to_travel\": ").Append(F(ring.baseTimeToTravel)).Append(",\n");
+            sb.Append("    \"hot_spots\": [");
+            if (ring.ringHotSpots != null)
+            {
+                sb.Append(string.Join(", ", ring.ringHotSpots.Cast<Transform>().Select(t => "[" + F(t.position.x) + ", " + F(t.position.y) + ", " + F(t.position.z) + "]")));
+            }
+
+            sb.Append("]\n  }\n");
         }
 
         private static string F(float v) => v.ToString("R", CultureInfo.InvariantCulture);

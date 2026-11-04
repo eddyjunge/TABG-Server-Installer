@@ -1,10 +1,19 @@
 use tabg_protocol::messages::{game_mode, match_mode};
 
+use crate::ring::RingRules;
+
 /// A place where joining players appear, with their facing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpawnPoint {
     pub position: [f32; 3],
     pub rotation: f32,
+}
+
+/// Start the countdown anyway after `after_seconds` if at least `min_players` are in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ForceStart {
+    pub after_seconds: f32,
+    pub min_players: u8,
 }
 
 /// Room configuration. Defaults follow TABG's stock `game_settings.txt`.
@@ -15,18 +24,24 @@ pub struct RoomSettings {
     pub max_players: u8,
     /// Empty means no password.
     pub password: String,
-    /// Lobby spawn points. Real ones come from the map data extracted from the host's game files;
-    /// until that exists, they are configured by hand.
+    /// Lobby spawn points (from the map data extracted from the host's game files).
     pub spawn_points: Vec<SpawnPoint>,
+    /// The countdown starts once this many players are in.
+    pub players_to_start: u8,
+    /// Countdown length in seconds.
+    pub countdown: f32,
+    pub force_start: Option<ForceStart>,
+    /// Time of day for lighting, 0..1.
     pub time_of_day: f32,
+    /// Sent to clients; the official server doesn't use it for timing.
     pub time_before_first_ring: f32,
-    pub base_ring_time: f32,
-    pub ring_sizes: Vec<f32>,
-    pub ring_speeds: Vec<f32>,
+    pub ring: RingRules,
     pub lives_per_team: i32,
     pub kills_to_win: u16,
     /// Movement updates per second (the official server uses 30).
     pub tick_rate: u32,
+    /// Seed for ring positions and the plane path.
+    pub seed: u64,
 }
 
 impl Default for RoomSettings {
@@ -40,14 +55,19 @@ impl Default for RoomSettings {
                 position: [0.0, 100.0, 0.0],
                 rotation: 0.0,
             }],
-            time_of_day: 12.0,
+            players_to_start: 2,
+            countdown: 20.0,
+            force_start: Some(ForceStart {
+                after_seconds: 200.0,
+                min_players: 2,
+            }),
+            time_of_day: 0.25,
             time_before_first_ring: 70.0,
-            base_ring_time: 200.0,
-            ring_sizes: vec![4240.0, 3450.0, 1710.0, 830.0, 360.0, 140.0],
-            ring_speeds: vec![25.0, 3.0, 1.5, 1.5, 2.0, 2.0],
+            ring: RingRules::default(),
             lives_per_team: 256,
             kills_to_win: 20,
             tick_rate: 30,
+            seed: 0x7ab6,
         }
     }
 }

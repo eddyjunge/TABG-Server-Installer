@@ -17,12 +17,21 @@ struct Args {
     max_players: u8,
     #[arg(long, default_value = "")]
     password: String,
-    /// Map data from `scripts/dump-world.sh`; its lobby spawn points are used.
+    /// Map data from `scripts/dump-world.sh`: lobby spawn points and ring timing.
     #[arg(long)]
     world: Option<std::path::PathBuf>,
-    /// Lobby spawn point as x,y,z (repeatable); overrides --world.
+    /// Lobby spawn point as x,y,z (repeatable); overrides --world's spawn points.
     #[arg(long = "spawn", value_parser = parse_vec3, allow_hyphen_values = true)]
     spawns: Vec<[f32; 3]>,
+    /// Players needed before the countdown starts.
+    #[arg(long, default_value_t = 2)]
+    players_to_start: u8,
+    /// Countdown length in seconds.
+    #[arg(long, default_value_t = 20.0)]
+    countdown: f32,
+    /// Seed for ring positions and the plane path (random by default).
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
 /// Used when neither --world nor --spawn is given: one lobby spawn of the default map, as seen from
@@ -37,6 +46,11 @@ fn parse_vec3(s: &str) -> Result<[f32; 3], String> {
     parts.try_into().map_err(|_| "expected x,y,z".to_string())
 }
 
+fn fail(msg: impl std::fmt::Display) -> ! {
+    eprintln!("error: {msg}");
+    std::process::exit(1);
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -44,27 +58,26 @@ fn main() {
         )
         .init();
     let args = Args::parse();
+    let seed = args.seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.as_nanos() as u64)
+    });
     let mut settings = RoomSettings {
         max_players: args.max_players,
         password: args.password,
+        players_to_start: args.players_to_start,
+        countdown: args.countdown,
+        seed,
+        spawn_points: vec![SpawnPoint {
+            position: FALLBACK_SPAWN,
+            rotation: 0.0,
+        }],
         ..Default::default()
     };
-    settings.spawn_points = if !args.spawns.is_empty() {
-        args.spawns
-            .into_iter()
-            .map(|position| SpawnPoint {
-                position,
-                rotation: 0.0,
-            })
-            .collect()
-    } else if let Some(path) = &args.world {
-        let world = match tabg_world::World::load(path) {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("error: {e}");
-                std::process::exit(1);
-            }
-        };
+
+    if let Some(path) = &args.world {
+        let world = tabg_world::World::load(path).unwrap_or_else(|e| fail(e));
         let lobby: Vec<_> = world
             .spawn_group(tabg_world::LOBBY_GROUP)
             .map(|p| SpawnPoint {
@@ -73,17 +86,28 @@ fn main() {
             })
             .collect();
         if lobby.is_empty() {
-            eprintln!("error: {} has no lobby spawn points", path.display());
-            std::process::exit(1);
+            fail(format!("{} has no lobby spawn points", path.display()));
         }
         tracing::info!(count = lobby.len(), scenes = ?world.scenes, "loaded lobby spawn points");
-        lobby
-    } else {
-        vec![SpawnPoint {
-            position: FALLBACK_SPAWN,
-            rotation: 0.0,
-        }]
-    };
+        settings.spawn_points = lobby;
+        if let Some(ring) = world.ring {
+            settings.ring.ring_times = ring.ring_times;
+            settings.ring.base_time = ring.base_time_to_travel;
+            settings.ring.hot_spots = ring.hot_spots;
+            tracing::info!(ring_times = ?settings.ring.ring_times, "loaded ring timing");
+        }
+    }
+    if !args.spawns.is_empty() {
+        settings.spawn_points = args
+            .spawns
+            .into_iter()
+            .map(|position| SpawnPoint {
+                position,
+                rotation: 0.0,
+            })
+            .collect();
+    }
+
     let stop = Arc::new(AtomicBool::new(false));
     if let Err(e) = run(
         ServerConfig {
@@ -93,7 +117,6 @@ fn main() {
         },
         stop,
     ) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+        fail(e);
     }
 }
