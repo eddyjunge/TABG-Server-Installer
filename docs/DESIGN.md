@@ -226,7 +226,7 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
   - ~~ENet transport.~~ Done (`tabg-enet-sys` + `tabg-net`); Landfall's server accepts our ENet connections.
   - Our server (`tabg-server`) accepts players, sends the world, and replicates movement; two probes see each other move (end-to-end test).
   - ~~A real client joins by IP.~~ Done 2026-11-04, fully automated: `scripts/real-client-test.sh` launches a test copy of the real client under Proton with the `DevAutoJoin` dev plugin, which joins `127.0.0.1:7777` from the main menu. The unmodified game logic loaded `MainWorld_Base`, spawned at our lobby spawn, showed "WAITING FOR PLAYERS / 1 ALIVE / 100 HP", and kept pinging and sending movement.
-  - **Open:** the real client sees a second player (a `tabg-probe` bot walking in front of it) move.
+  - ~~The real client sees a second player move.~~ Done 2026-11-04: with a `tabg-probe` bot walking circles in front of it, the real client showed "2 ALIVE" and rendered "tabg-bot" moving (2160 movement batches received). **M1 complete.**
   - ~~Dumper v0.~~ `mods/src/WorldDumper` + `scripts/dump-world.sh` export the lobby spawn points (6 on `ServerTerrain`, identical to what Landfall's server hands out) from the host's own dedicated-server install, offline; `tabg-server --world` uses them. Interactables, loot spawners and cars come with M3.
 
   Findings from the reference server (2026-11-04):
