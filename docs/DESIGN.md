@@ -1,0 +1,244 @@
+# tabg — Design
+
+Status: agreed 2026-11-04. This replaces everything in the old repo (three GUIs, TabgInstaller.Core, BepInEx server mods).
+
+## Decisions
+
+| Topic | Decision |
+|---|---|
+| Audience | Friends hosting a server on their own PC (Windows or Linux) |
+| Game server | Our own server written in Rust, replacing Landfall's Unity dedicated server. Unmodified TABG clients connect to it |
+| Tool | One Rust binary, `tabg`: CLI + local web dashboard |
+| Runtime | Console window + browser. The CLI talks to the running host over localhost |
+| Dashboard | Server-rendered HTML + htmx, live updates over SSE, served by the binary |
+| Joining | Real join codes via Unity Relay, the same way the official server gets them. Direct IP (UPnP) as fallback |
+| Client mods | Optional extras only; the base game needs no mods. Auto-sync via share code: catalog mods from GitHub Releases, custom DLLs from the host |
+| v1 scope | Setup, start/stop, live console, mods, share/join, settings + presets, players & admins, loadout & ring editor, crash recovery + backups |
+| Mods | All groups kept. Server-side mods become native Rust features; client mods stay C#/BepInEx |
+| Mod builds | Built locally by a release script (no game DLLs in CI or git) |
+| Repo | Same repo, old code deleted, proprietary DLLs purged from history |
+
+## 1. What tabg is
+
+**Goal:** one person double-clicks `tabg`, gets a working TABG server in a few minutes, and sends friends a join code. Friends join with their normal TABG. If the host uses client-side extras (proximity chat, vehicles, maps), friends run `tabg join <code>` once and get exactly the right mods.
+
+**Non-goals for v1:** public 24/7 hosting, server clusters, a mod marketplace for third-party mods, Steam ticket verification.
+
+## 2. User flows
+
+**Host**
+1. Download `tabg` (one file, about 10–15 MB) and run it. The dashboard opens at `http://localhost:<port>`.
+2. Setup: tabg finds the TABG install and extracts the map data from it once (§4.5). Then you pick a preset (Battle Royale, Gun Game, Deathmatch…).
+3. Start. The dashboard shows the join code, players, live console, settings, loadouts and ring, presets, and backups.
+4. Share: if client mods are in use, the dashboard shows a share code for friends.
+
+**Friend**
+- Base game: enter the join code in TABG. Nothing to install.
+- With client extras: `tabg join TABG-…` finds the friend's TABG, makes a modded copy, installs the exact client mods (hash-checked), and offers a Launch button.
+
+## 3. System overview
+
+```
+ host PC
+ ┌───────────────────────────────────────────────────────────────┐
+ │ tabg (host process)                                           │
+ │  ├─ dashboard  (axum, localhost only)  ◄── browser            │
+ │  ├─ local API  ◄── `tabg …` CLI                               │
+ │  ├─ sync endpoint (read-only, content-addressed) ◄── friends  │
+ │  └─ supervisor ──spawns──► tabg server-process (child)        │
+ │                            ├─ game simulation                 │
+ │                            ├─ ENet transport (direct IP)      │
+ │                            └─ Unity Transport over Unity Relay│
+ └───────────────────────────────────────────────────────────────┘
+        ▲ JSON-lines IPC on stdio (commands in, events out)
+ friends: unmodified TABG client ──relay/IP──► game server
+          optional modded copy (C# client mods) for extras
+```
+
+The game server runs as a **child process** of the host, so a crash in game logic never takes down the dashboard. The supervisor restarts it with backoff and records why it crashed.
+
+## 4. The game server
+
+### 4.1 Compatibility target
+- Target: the current Steam TABG client. The server must match the client's version hash (`APP_VERSION` in Landfall's `ServerClient`). tabg reads the hash from the host's install at setup, so a TABG update shows a clear "client version X not supported yet" error instead of broken joins.
+- We implement Landfall's behaviour from protocol knowledge. **No Landfall code is copied and no Landfall assets are redistributed** (§10).
+
+### 4.2 Transports
+Both carry the same message layer (§4.3).
+
+1. **ENet (direct IP).** Landfall uses ENet-CSharp, a fork of ENet whose wire format may differ from upstream ENet. We vendor the fork's MIT-licensed C source and call it through FFI (`tabg-enet-sys`); porting it to pure Rust can come later. Clients connect with `ConnectToServerIP(ip, port)`.
+2. **Unity Transport over Unity Relay (join codes).** The official server signs in anonymously to Unity Gaming Services (Landfall's project), creates a relay allocation and gets a join code. Clients join with `ConnectToRelayServer(code)` over Unity Transport. We implement:
+   - the UGS anonymous sign-in, allocation and join-code REST calls;
+   - the relay bind/ping/relay protocol;
+   - the Unity Transport framing and reliability that the client uses.
+
+   We use it exactly as the official server does: one allocation per running server.
+
+Relay is the default. Direct IP is the fallback: tabg tries UPnP to open the UDP port, and the dashboard explains manual port forwarding if UPnP fails.
+
+### 4.3 Message layer
+- Frame: `[event code: u8][payload]` on channel 0, reliable or unreliable per message.
+- 126 event codes; the server handles 48 of them as inbound (Join, RoomInit, RequestWorldState, PlayerUpdate, PlayerFire, DamageEvent, RequestWeaponPickUp, RequestItemDrop, CarUpdate, RequestSeat, RequestAirplaneDrop, ReviveState, ChatMessage, AdminCommand…).
+- Payloads are little-endian binary in .NET `BinaryWriter` style. Each message gets a Rust struct with `encode`/`decode` in `tabg-protocol`, plus round-trip tests against **recorded real traffic** (§9).
+- Our own client-mod protocols use event codes ≥ 240 (240 voice, 241 radar, 242 range, 243 devtest, 244 skins, 245 vehicles). New features go through one code with a channel byte, plus a capability handshake (§7).
+
+### 4.4 Game simulation
+- Landfall's server is mostly a referee. Clients send their own movement, shots and damage. The server validates them, owns match state (players, teams, inventory, loot, ring, plane, cars, game phase) and broadcasts. We copy this model first and tighten validation later.
+- `tabg-game` is pure logic with no IO and no clock: `state + input → state + outgoing messages`. That makes it unit-testable and deterministic.
+- Game modes: Battle Royale first, then Brawl/Deathmatch, Gun Game (loadout progression), Bomb, Deception, and Test.
+
+### 4.5 World data
+Loot spawners, player and car spawns, networked interactables (doors etc., with the IDs the client expects), map bounds, loot tables, plane paths, and later the navmesh and collision geometry all live in Landfall's Unity scene files.
+
+- **Extraction:** a small C# BepInEx dumper mod runs once in batch mode against the host's own TABG files. It loads each map and writes `world.json` (and `navmesh.bin` later). It runs at setup, is cached per game-version hash, and its output is never redistributed.
+- The dumper is the only place left where we run Landfall's Unity code. Whether to use the client install or the dedicated-server install is decided in M1.
+
+### 4.6 Server list
+The official server sends `GameServerHeartbeat` to Landfall's community backend (name, join code, player count, mode, password flag…). We send the same heartbeat so the server shows up in TABG's community server list. This is on by default and can be turned off for private servers.
+
+### 4.7 Identity, admins and commands
+- v1 does not verify Steam tickets. Players are identified by the IDs the client sends on join (Steam/Epic/PlayFab, as ServerLogger records them).
+- Admins, bans and permissions are native, stored by player ID.
+- Chat commands are implemented natively, with the command set people know from Citruslib: `/give`, `/bring`, `/goto`, `/send_pos`, `/start`, kick/ban… The dashboard console runs the same commands as "console".
+
+### 4.8 Old server mods → native features
+
+| Old BepInEx server mod | In the Rust server |
+|---|---|
+| AntiCheatBypass, Citruslib, EOS DLL copy, SteamCMD | not needed |
+| MatchCore (loadouts, rings, votes, drops, spell drops, win rules) | core game rules + settings |
+| ServerLogger | player history store |
+| SoloTesting | "allow solo start" setting |
+| ProximityChat.Server | voice relay for event 240 (needs client mod) |
+| RangeMap / DevTestMap servers | "Range" and "DevTest" modes (need the Maps client mod) |
+| CustomGameSkins.Server | skins authorization, **off unless the host enables it** |
+| AdminRadar.Server | debug telemetry; dummies only by default |
+| FakePlayers (bots) | native bots on the extracted navmesh (M6) |
+| UnusedVehicles + Vehicles.Shared rules | native vehicle/FPV rules; the pure rule code ports over as-is (M6) |
+| PerformanceServer | the server is efficient by design; delta replication only if a client mod needs it later |
+
+## 5. The tabg tool
+
+### 5.1 Process model and CLI
+- `tabg` with no arguments starts the host process and opens the dashboard. Other commands talk to a running host over its local API, starting one if needed.
+- Commands: `setup`, `start`, `stop`, `restart`, `status`, `console`, `say`, `kick`, `ban`, `admins`, `config get|set`, `preset list|apply|save`, `mods`, `share`, `join <code>`, `backup list|restore`, `logs`.
+
+### 5.2 State and the declarative model
+- Each server is a folder with `tabg.toml`: preset, mode, game settings, loadouts, ring, admins, the client mod pack, and the network mode. The dashboard and CLI only edit this file, then **apply** it. The running server hot-reloads what it can and says when a restart is needed.
+- A preset is a partial `tabg.toml`. The built-in presets ship as data.
+- **Import:** an existing `game_settings.txt` / `TheStarterPack.txt` / `PlayerPerms.json` can be imported once. The format rules from the old code are kept for this: 0/1 keys, the starter-pack loadout syntax, and cross-field rules such as `KillsToWin` only for Brawl.
+- Data lives in the OS app-data dir (`~/.local/share/tabg`, `%APPDATA%\tabg`): servers, extracted world cache, download cache (by sha256), backups, logs, and the player store (SQLite).
+
+### 5.3 Dashboard
+Overview (status, join code, players, quick actions) · Console · Players (kick/ban/admin, history) · Settings (typed forms, validation) · Loadouts & ring editor · Presets · Client mods & share · Backups · Logs.
+
+### 5.4 Reliability
+- Crash recovery: the supervisor restarts the server with exponential backoff, keeps the crash log, and shows it in the dashboard.
+- Backups: `tabg.toml` and the player store, snapshotted before every apply and restorable with one click. They are small; game files are never copied.
+
+### 5.5 Security
+- The dashboard and local API listen only on `127.0.0.1`. They check the `Host` header against DNS rebinding and `Origin` on every state-changing request, and require a per-session token, so websites open in your browser can't control the server.
+- The sync endpoint is a separate port. It is read-only and serves only files in the current share code, by sha256, and never lists directories.
+
+## 6. Client side
+
+- **Base game:** unmodified client, nothing to install.
+- **Modded copy** (only when the server uses client extras):
+  - Copy the TABG install without `EasyAntiCheat/` and write `steam_appid.txt` = `823130`.
+  - Install BepInEx 5.4.23.3 (win x64, Doorstop 4 config) and PopupBlocker; the EAC boot-error remover is pinned by version and hash.
+  - Launch the exe directly while Steam is running. On Linux, run under Proton with `WINEDLLOVERRIDES="winhttp=n,b"`.
+  - The copy has its own `tabg.toml` with the pack, and `apply` keeps it exactly in sync.
+- **Share code:** a self-contained encoding of the client pack (mod id@version for catalog mods; sha256 plus the host's sync address for custom DLLs). No central server is involved.
+- **`tabg join`:**
+  1. Decode the share code.
+  2. Fetch catalog mods from GitHub Releases and custom files from the host.
+  3. Verify every hash.
+  4. Apply.
+  5. Launch.
+
+## 7. Client mods (C#)
+
+- **Kept:** ProximityChat.Client, ModSettings, PopupBlocker, FlyingControls, CustomGrenades (client), CoordsDisplay, PerformanceClient (client-side optimizations only), Maps.Client (RangeMap + DevTestMap merged), CustomGameSkins.Client, AdminRadar.Client (local-player ESP fallback removed).
+- **New:** the world dumper (§4.5) and **Tabg.Net**, a shared library for client mods:
+  - one receive dispatcher;
+  - framed sub-channels;
+  - a capability handshake on join (the client announces mods and versions, and the server enables matching features per player).
+- **Dropped:** EnhancedClient, StarterPack, TestMod/GiveMod, WeaponSpawnConfig, and all server-side BepInEx mods (replaced by §4.8).
+- **Build:**
+  - One solution, `mods/Mods.sln`. `mods/src/Directory.Build.props` sets everything; the only input is `TabgClientDir`, a modded TABG client copy with BepInEx installed (env `TABG_CLIENT_DIR`, gitignored `mods/Local.props`, or `-p:`). Game, Unity, Sirenix and BepInEx assemblies all resolve from there, and projects list extra modules as `<GameRef Include="UnityEngine.AudioModule" />`.
+  - Output DLLs are named `Tabg.<Mod>.dll`.
+  - No DLLs in git (`.gitignore` blocks them).
+  - Deterministic builds with `PathMap`, and no post-build copies into tracked folders.
+  - `mods/tests/Vehicles.Tests` is still the old console runner; converting it to xUnit is open work.
+- **Release:** `scripts/release-mods` builds Release, packs each mod, writes `catalog.json` (id, version, sha256, size, dependencies) and uploads to a GitHub Release. tabg pins catalog versions.
+
+## 8. Repo layout
+
+```
+crates/
+  tabg-protocol    event codes, message structs, codec, version hash
+  tabg-enet-sys    vendored ENet-CSharp C source + FFI
+  tabg-utp         Unity Transport framing + Unity Relay + UGS auth client
+  tabg-net         transport trait over ENet and UTP
+  tabg-game        pure simulation: rooms, players, loot, ring, modes, commands
+  tabg-world       world.json model and loader (navmesh later)
+  tabg-server      tick loop: net + game + world, IPC to the host
+  tabg-host        supervisor, state/apply, player store, backups, sync, UPnP, heartbeat
+  tabg-web         dashboard + local API (axum, htmx, SSE)
+  tabg             the binary: CLI entry point
+  tabg-probe       headless test client that speaks the protocol (tests + debugging)
+mods/              C# client mods, dumper, Tabg.Net, recorder (dev only)
+presets/           built-in presets (TOML)
+scripts/           release-mods, record-session
+docs/DESIGN.md
+```
+
+Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rustls), igd-next (UPnP), rusqlite, sha2, zip, tracing.
+
+## 9. Testing
+
+- **Recorded ground truth:** a dev-only C# recorder mod on Landfall's own server (on the dev machine) logs every inbound and outbound event with timestamps while real clients play. The recordings become fixtures for:
+  - codec round-trip tests: decode → encode gives the same bytes;
+  - behaviour tests: same inputs, then compare our outgoing messages with Landfall's.
+- **Game logic:** unit tests in `tabg-game`, plus property tests for codecs.
+- **Integration:** `tabg-probe` clients join our server in CI (no game files needed) and play scripted scenarios.
+- **Manual:** a real TABG client joins at the end of each milestone.
+- Builds and tests run locally; CI runs the Rust workspace (no game files needed).
+
+## 10. Risks
+
+| Risk | Mitigation |
+|---|---|
+| ENet-CSharp wire format differs from upstream ENet | Vendor the fork's C source; verify in M1 |
+| Unity Relay / Unity Transport reimplementation is large and could be blocked by Unity/Landfall; ToS risk | Use it exactly like the official server; direct IP + UPnP fallback always works |
+| Behaviour the client expects that isn't visible in code (timing, ordering) | Recorded sessions + `tabg-probe` comparisons |
+| TABG update changes the protocol | Version hash check at setup; record a new session and diff |
+| Unmodified client with EAC joining a server without EAC | Verify in M1 (the official server runs fine with `AntiCheat=false`) |
+| Bots and vehicles need navmesh/collision data | Dumper exports them (M6); bots come last |
+| Legal | Implement from protocol knowledge, copy no Landfall code, redistribute no Landfall files or extracted data, keep Landfall/Unity/Sirenix DLLs out of git. Landfall's terms may still object; that's an accepted risk |
+
+## 11. Milestones
+
+- **M0 – Reset.** Mirror backup → delete old code → purge proprietary binaries from history → force-push → new workspace skeleton with CI. *(Done 2026-11-04: fresh single-commit history; old repo, tags, PR refs and all release downloads are backed up outside the repo.)*
+- **M1 – Proof.**
+  - Recorder mod and one recorded session.
+  - `tabg-protocol` for the join/spawn/movement messages.
+  - ENet transport.
+  - A real client joins by IP on LAN, spawns, and sees a second client move.
+  - Dumper v0 (spawns + interactables).
+- **M2 – Join codes.** UGS sign-in, relay allocation, Unity Transport, server-list heartbeat, UPnP fallback.
+- **M3 – Battle Royale playable.** Loot, inventory, weapons, damage, death/revive, ring, plane drop, cars, match flow, win.
+- **M4 – tabg v1.** Dashboard, settings and presets, players/admins/console, loadout & ring editor, crash recovery, backups, share/join with client sync, Windows + Linux builds.
+- **M5 – Modes & extras.** Brawl, Gun Game, Bomb, Deception, Test; MatchCore rules; proximity chat relay; Range/DevTest; skins (opt-in); radar.
+- **M6 – Bots & vehicles.** Navmesh bots (FakePlayers successor) and vehicle/FPV rules.
+
+## 12. Carried over from the old repo
+Knowledge worth keeping, rewritten rather than copied:
+- the client modded-copy recipe (§6);
+- Steam library detection (`libraryfolders.vdf`, registry on Windows, native and Flatpak Steam paths on Linux);
+- server names must use Landfall's word list (`landfallgames/tabg-word-list`), or the server-list heartbeat rejects them;
+- the item ID database (reconcile the conflicting IDs, e.g. ammo 5 vs 6, against the dumped loot tables);
+- the preset contents;
+- the game_settings/TheStarterPack format rules (for import);
+- the pure rule code in Vehicles.Shared;
+- the tests for ProximityChat frame processing and MatchCore config parsing.

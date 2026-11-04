@@ -1,0 +1,20 @@
+# Rust
+/target/
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+
+# Never commit game, Unity, BepInEx or built mod binaries
+*.dll
+*.pdb
+*.exe
+*.so
+*.zip
+
+# Local machine settings
+mods/Local.props
+.env

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <GameRef Include="UnityEngine.AudioModule" />
+    <GameRef Include="UnityEngine.IMGUIModule" />
+    <GameRef Include="UnityEngine.InputLegacyModule" />
+    <GameRef Include="UnityEngine.TextRenderingModule" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ModSettings/ModSettings.csproj" Private="false" />
+  </ItemGroup>
+</Project>

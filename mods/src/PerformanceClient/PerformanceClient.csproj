@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <GameRef Include="UnityEngine.AnimationModule" />
+    <GameRef Include="UnityEngine.IMGUIModule" />
+    <GameRef Include="UnityEngine.InputLegacyModule" />
+    <GameRef Include="UnityEngine.ParticleSystemModule" />
+    <GameRef Include="UnityEngine.PhysicsModule" />
+    <GameRef Include="UnityEngine.TerrainModule" />
+    <GameRef Include="UnityEngine.UIModule" />
+    <GameRef Include="UnityEngine.UI" />
+    <GameRef Include="Unity.TextMeshPro" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <GameRef Include="UnityEngine.AudioModule" />
+    <GameRef Include="UnityEngine.PhysicsModule" />
+    <GameRef Include="UnityEngine.ParticleSystemModule" />
+    <GameRef Include="UnityEngine.IMGUIModule" />
+    <GameRef Include="UnityEngine.InputLegacyModule" />
+    <GameRef Include="UnityEngine.TextRenderingModule" />
+    <GameRef Include="Sirenix.Serialization" />
+    <GameRef Include="EasyRoads3Dv3" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="$(TabgSharedDir)/Vehicles.Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="AudioAssets/*.wav" LogicalName="TabgAudio.%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ModSettings/ModSettings.csproj" Private="false" />
+  </ItemGroup>
+</Project>

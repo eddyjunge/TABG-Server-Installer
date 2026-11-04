@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <GameRef Include="UnityEngine.IMGUIModule" />
+    <GameRef Include="UnityEngine.InputLegacyModule" />
+    <GameRef Include="UnityEngine.TextRenderingModule" />
+  </ItemGroup>
+</Project>

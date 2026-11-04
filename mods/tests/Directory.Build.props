@@ -1,0 +1,11 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)../Local.props" Condition="Exists('$(MSBuildThisFileDirectory)../Local.props')" />
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <TabgSharedDir>$(MSBuildThisFileDirectory)../shared</TabgSharedDir>
+  </PropertyGroup>
+</Project>

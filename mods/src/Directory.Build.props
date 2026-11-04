@@ -1,0 +1,34 @@
+<Project>
+  <!--
+    Shared settings for every BepInEx client mod under mods/src.
+
+    Game and BepInEx assemblies are NEVER committed. They are referenced from a local
+    modded TABG client copy (one with BepInEx installed), set via one of:
+      - environment variable TABG_CLIENT_DIR
+      - mods/Local.props (gitignored), see mods/Local.props.example
+      - dotnet build -p:TabgClientDir=/path/to/TotallyAccurateBattlegrounds-Modded
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)../Local.props" Condition="Exists('$(MSBuildThisFileDirectory)../Local.props')" />
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Tabg.$(MSBuildProjectName)</AssemblyName>
+    <Deterministic>true</Deterministic>
+    <PathMap>$(MSBuildThisFileDirectory)=/tabg/mods/src/</PathMap>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+
+    <TabgClientDir Condition="'$(TabgClientDir)' == ''">$(TABG_CLIENT_DIR)</TabgClientDir>
+    <TabgManagedDir Condition="'$(TabgManagedDir)' == ''">$(TabgClientDir)/TotallyAccurateBattlegrounds_Data/Managed</TabgManagedDir>
+    <BepInExCoreDir Condition="'$(BepInExCoreDir)' == ''">$(TabgClientDir)/BepInEx/core</BepInExCoreDir>
+    <TabgSharedDir>$(MSBuildThisFileDirectory)../shared</TabgSharedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Every mod gets these; projects add more with <GameRef Include="UnityEngine.AudioModule" />. -->
+    <GameRef Include="Assembly-CSharp;UnityEngine;UnityEngine.CoreModule" />
+    <BepInExRef Include="BepInEx;0Harmony" />
+  </ItemGroup>
+</Project>

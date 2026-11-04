@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <GameRef Include="UnityEngine.PhysicsModule" />
+    <GameRef Include="UnityEngine.ParticleSystemModule" />
+    <GameRef Include="Sirenix.Serialization" />
+    <GameRef Include="Sirenix.OdinInspector.Attributes" />
+    <GameRef Include="Sirenix.Serialization.Config" />
+    <GameRef Include="Sirenix.Utilities" />
+  </ItemGroup>
+</Project>

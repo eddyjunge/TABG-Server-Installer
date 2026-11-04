@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Unit tests for client mod logic. Builds against the mods, so it needs TabgClientDir. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="FluentAssertions" Version="7.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="$(TabgSharedDir)/CustomGameSkins.Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <ProjectReference Include="../../src/ProximityChat.Client/ProximityChat.Client.csproj" />
+  </ItemGroup>
+</Project>

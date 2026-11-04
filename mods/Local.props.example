@@ -1,0 +1,6 @@
+<Project>
+  <!-- Copy to mods/Local.props (gitignored) and point at your modded TABG client copy. -->
+  <PropertyGroup>
+    <TabgClientDir>/home/you/.local/share/Steam/steamapps/common/TotallyAccurateBattlegrounds-Modded</TabgClientDir>
+  </PropertyGroup>
+</Project>

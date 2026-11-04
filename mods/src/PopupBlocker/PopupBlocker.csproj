@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../ModSettings/ModSettings.csproj" Private="false" />
+  </ItemGroup>
+</Project>

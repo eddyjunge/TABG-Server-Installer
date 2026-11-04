@@ -1,0 +1,20 @@
+<Project>
+  <!-- Turn GameRef / BepInExRef items into non-copied references against the local install. -->
+  <ItemGroup>
+    <Reference Include="@(GameRef)">
+      <HintPath>$(TabgManagedDir)/%(Identity).dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="@(BepInExRef)">
+      <HintPath>$(BepInExCoreDir)/%(Identity).dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="TabgCheckGamePaths" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(TabgManagedDir)/Assembly-CSharp.dll')"
+           Text="TABG game assemblies not found at '$(TabgManagedDir)'. Point TabgClientDir at a modded TABG client copy (env TABG_CLIENT_DIR, mods/Local.props, or -p:TabgClientDir=...)." />
+    <Error Condition="!Exists('$(BepInExCoreDir)/BepInEx.dll')"
+           Text="BepInEx not found at '$(BepInExCoreDir)'. The TabgClientDir copy must have BepInEx 5 installed." />
+  </Target>
+</Project>
