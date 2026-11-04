@@ -15,7 +15,7 @@ Status: agreed 2026-11-04. This replaces everything in the old repo (three GUIs,
 | Client mods | Optional extras only; the base game needs no mods. Auto-sync via share code: catalog mods from GitHub Releases, custom DLLs from the host |
 | v1 scope | Setup, start/stop, live console, mods, share/join, settings + presets, players & admins, loadout & ring editor, crash recovery + backups |
 | Mods | All groups kept. Server-side mods become native Rust features; client mods stay C#/BepInEx |
-| Mod builds | Built locally by a release script (no game DLLs in CI or git) |
+| Builds | Everything is built and tested locally (`scripts/check.sh`); no CI. Mod releases come from a local release script |
 | Repo | Same repo, old code deleted, proprietary DLLs purged from history |
 
 ## 1. What tabg is
@@ -201,9 +201,9 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
   - codec round-trip tests: decode → encode gives the same bytes;
   - behaviour tests: same inputs, then compare our outgoing messages with Landfall's.
 - **Game logic:** unit tests in `tabg-game`, plus property tests for codecs.
-- **Integration:** `tabg-probe` clients join our server in CI (no game files needed) and play scripted scenarios.
+- **Integration:** `tabg-probe` clients join our server in tests (no game files needed) and play scripted scenarios.
 - **Manual:** a real TABG client joins at the end of each milestone.
-- Builds and tests run locally; CI runs the Rust workspace (no game files needed).
+- Everything runs locally via `scripts/check.sh` (`--mods` adds the C# client mods). There is no CI.
 
 ## 10. Risks
 
@@ -219,7 +219,7 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
 
 ## 11. Milestones
 
-- **M0 – Reset.** Mirror backup → delete old code → purge proprietary binaries from history → force-push → new workspace skeleton with CI. *(Done 2026-11-04: fresh single-commit history; old repo, tags, PR refs and all release downloads are backed up outside the repo.)*
+- **M0 – Reset.** Mirror backup → delete old code → purge proprietary binaries from history → force-push → new workspace skeleton. *(Done 2026-11-04: fresh single-commit history; old repo, tags, PR refs and all release downloads are backed up outside the repo.)*
 - **M1 – Proof.**
   - Recorder mod and one recorded session.
   - `tabg-protocol` for the join/spawn/movement messages.

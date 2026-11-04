@@ -44,6 +44,13 @@ dotnet run --project mods/tests/Vehicles.Tests
 
 Game, Unity and BepInEx assemblies are never committed. The mods compile against your own install.
 
+There is no CI. Run all checks locally before pushing:
+
+```bash
+scripts/check.sh          # Rust + vehicle rules
+scripts/check.sh --mods   # also the C# client mods
+```
+
 ## Legal
 
 tabg is an unofficial fan project, not affiliated with Landfall Games. It contains no Landfall code
