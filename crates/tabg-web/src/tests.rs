@@ -235,3 +235,41 @@ async fn ui_forms_apply_settings_and_presets() {
         2
     );
 }
+
+#[tokio::test]
+async fn settings_page_has_mode_map_and_rules_and_saves_them() {
+    let (app, _d) = app();
+    let (_, body, _) = send(
+        &app,
+        req("GET", "/settings")
+            .header(header::COOKIE, "tabg_session=secret")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    for needle in [
+        "name=\"game_mode\"",
+        "name=\"map\"",
+        "Brawl (castle",
+        "name=\"respawn\"",
+        "name=\"voice_range\"",
+        "name=\"skins\"",
+    ] {
+        assert!(body.contains(needle), "settings page lacks {needle}");
+    }
+    let form = "name=fight&max_players=20&mode=relay&game_mode=brawl&map=island&teams=squad&players_to_start=2&countdown=20&force_start_after=0&force_start_min_players=2&loot_amount=0.1&time_of_day=0.25&tick_rate=30&voice_range=50&respawn_delay=3&kills_to_win=10&time_limit=0";
+    let (_, body, _) = send(
+        &app,
+        req("POST", "/ui/settings")
+            .header(header::COOKIE, "tabg_session=secret")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form))
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Saved"), "{body}");
+    let c = tabg_host::apply::read_config(&app.paths).unwrap();
+    assert_eq!(c.game.mode, tabg_host::config::GameMode::Brawl);
+    assert_eq!(c.rules.kills_to_win, 10);
+    assert!(!c.rules.respawn && !c.game.skins);
+}

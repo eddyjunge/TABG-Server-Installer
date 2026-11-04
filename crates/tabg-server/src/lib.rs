@@ -292,7 +292,7 @@ pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Re
             rotation: p.rotation,
         })
         .collect();
-    if lobby.is_empty() {
+    if lobby.is_empty() && world.brawl.is_none() {
         return Err("the map data has no lobby spawn points".into());
     }
     settings.spawn_points = lobby;
@@ -358,5 +358,57 @@ pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Re
         settings.ring.base_time = ring.base_time_to_travel;
         settings.ring.hot_spots.clone_from(&ring.hot_spots);
     }
+    if let Some(b) = &world.brawl {
+        settings.brawl = brawl_rules(b);
+        settings.game_mode = tabg_protocol::messages::game_mode::BRAWL;
+    }
     Ok(())
+}
+
+fn brawl_rules(b: &tabg_world::BrawlData) -> tabg_game::brawl::BrawlRules {
+    use tabg_game::brawl::{BrawlRules, House, Preset, tier};
+    let drops = |d: &[tabg_world::LootDrop]| -> Vec<tabg_game::loot::Drop> {
+        d.iter()
+            .map(|d| tabg_game::loot::Drop {
+                weight: d.spawn_rate,
+                items: d.items.iter().map(|&[i, q]| (i, q)).collect(),
+            })
+            .collect()
+    };
+    let houses = |hs: &[tabg_world::BrawlHouse]| -> Vec<House> {
+        hs.iter()
+            .map(|h| House {
+                spawns: h
+                    .spawns
+                    .iter()
+                    .map(|s| tabg_game::SpawnPoint {
+                        position: s.position,
+                        rotation: s.rotation,
+                    })
+                    .collect(),
+                loot: h
+                    .loot
+                    .iter()
+                    .filter_map(|l| tier(&l.tier).map(|t| (t, l.position)))
+                    .collect(),
+            })
+            .collect()
+    };
+    BrawlRules {
+        houses: houses(&b.team_houses),
+        solo_houses: houses(&b.solo_houses),
+        presets: b
+            .presets
+            .iter()
+            .map(|p| Preset {
+                tiers: [
+                    drops(&p.high),
+                    drops(&p.med),
+                    drops(&p.low),
+                    drops(&p.attach),
+                ],
+                redo_chance: p.redo_chance,
+            })
+            .collect(),
+    }
 }

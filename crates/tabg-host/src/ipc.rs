@@ -43,10 +43,17 @@ pub fn load(paths: &Paths) -> Result<Loaded, String> {
         return Err(format!("tabg.toml: {}: {}", p.field, p.message));
     }
     let install = Install::load(paths);
-    let world_path = install
-        .world
-        .clone()
-        .ok_or("no map data yet: run `tabg setup` first")?;
+    let world_path = if config.game.mode == crate::config::GameMode::Brawl {
+        install
+            .brawl_world
+            .clone()
+            .ok_or("no Brawl map data yet: run `tabg setup --force`")?
+    } else {
+        install
+            .world
+            .clone()
+            .ok_or("no map data yet: run `tabg setup` first")?
+    };
     let world = tabg_world::World::load(&world_path).map_err(|e| e.to_string())?;
     Ok(Loaded {
         config,

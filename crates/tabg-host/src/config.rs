@@ -44,6 +44,9 @@ pub enum GameMode {
     BattleRoyale,
     /// TABG's Test mode: no plane, no ring, everyone starts where they stand.
     Test,
+    /// TABG's Brawl: teams start in spawn houses on the castle map; a wiped team respawns; most
+    /// kills (`rules.kills_to_win`) wins.
+    Brawl,
 }
 
 /// Which map to play.
@@ -388,6 +391,12 @@ impl ServerToml {
                 "each ring must be smaller than the one before",
             ));
         }
+        if g.mode == GameMode::Brawl && g.map != Map::Island {
+            p.push(problem(
+                "game.map",
+                "Brawl has its own map; use map = \"island\"",
+            ));
+        }
         if let Some(m) = g.map.client_mod()
             && !self
                 .mods
@@ -511,6 +520,7 @@ fn tabg_protocol_game_mode(mode: GameMode) -> u8 {
     match mode {
         GameMode::BattleRoyale => 0,
         GameMode::Test => 2,
+        GameMode::Brawl => 1,
     }
 }
 

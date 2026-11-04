@@ -78,6 +78,8 @@ pub struct RoomSettings {
     pub respawn: Option<Respawn>,
     /// With respawns: the match ends after this many seconds (0 = no limit); most kills wins.
     pub time_limit: f32,
+    /// Brawl houses and loot (from a Brawl map dump); used when `game_mode` is Brawl.
+    pub brawl: crate::brawl::BrawlRules,
     /// Let CustomGameSkins clients wear any built-in outfit (host opt-in).
     pub skins: bool,
     /// Range/DevTest map (needs the matching client mod and `game_mode` = Test).
@@ -129,6 +131,7 @@ impl Default for RoomSettings {
             voice_range: 50.0,
             test_map: None,
             skins: false,
+            brawl: crate::brawl::BrawlRules::default(),
             tick_rate: 30,
             seed: 0x7ab6,
         }

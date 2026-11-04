@@ -28,6 +28,8 @@ pub mod game_state {
     pub const FLYING: u8 = 2;
     pub const STARTED: u8 = 3;
     pub const ENDED: u8 = 4;
+    /// Brawl: the spawn house doors open and the round begins.
+    pub const OPEN_DOORS: u8 = 5;
 }
 
 /// `ServerResponse` flags in a refused [`RoomInitResponse`].

@@ -114,8 +114,58 @@ namespace Tabg.WorldDumper
             AppendLoot(sb);
             sb.Append(",\n");
             AppendCars(sb);
+            AppendBrawl(sb);
             sb.Append("}\n");
             return sb.ToString();
+        }
+
+        private static string Drops(LootPreset preset)
+        {
+            var drops = preset != null && preset.loot != null ? preset.loot : new System.Collections.Generic.List<LootDropWrapper>();
+            return "[" + string.Join(", ", drops.Select(d =>
+            {
+                var items = (d.m_loot ?? new Loot[0])
+                    .Where(l => l.loot != null && l.loot.GetComponent<Pickup>() != null)
+                    .Select(l => "[" + l.loot.GetComponent<Pickup>().m_itemIndex.ToString(CultureInfo.InvariantCulture) + ", " + l.quanitity.ToString(CultureInfo.InvariantCulture) + "]");
+                return "{\"spawn_rate\": " + F(d.spawnRate) + ", \"items\": [" + string.Join(", ", items) + "]}";
+            })) + "]";
+        }
+
+        private static string Houses(Transform layout)
+        {
+            if (layout == null || layout.parent == null)
+                return "[]";
+            var houses = new System.Collections.Generic.List<string>();
+            for (int j = 0; j < layout.parent.childCount; j++)
+            {
+                Transform house = layout.parent.GetChild(j);
+                var loot = house.GetComponentsInChildren<Landfall.Network.LootTAG>(true)
+                    .Select(t => "{\"tier\": " + Quote(t.transform.parent.name) + ", \"position\": [" + F(t.transform.position.x) + ", " + F(t.transform.position.y) + ", " + F(t.transform.position.z) + "]}");
+                var spawns = house.GetComponentsInChildren<SpawnPointTAG>(true)
+                    .Select(t => "{\"group\": " + t.ID.ToString(CultureInfo.InvariantCulture) + ", \"position\": [" + F(t.transform.position.x) + ", " + F(t.transform.position.y) + ", " + F(t.transform.position.z) + "], \"rotation\": " + F(t.transform.rotation.eulerAngles.y) + "}");
+                houses.Add("{\"loot\": [" + string.Join(", ", loot) + "], \"spawns\": [" + string.Join(", ", spawns) + "]}");
+            }
+            return "[" + string.Join(",\n      ", houses) + "]";
+        }
+
+        /// <summary>
+        /// Brawl: every spawn house's loot spots (by tier) and the presets the server draws one of
+        /// each round (official BrawlLootSelector). Read from the unspawned prefab, because the live
+        /// copy consumes its loot spots when the round starts.
+        /// </summary>
+        private static void AppendBrawl(StringBuilder sb)
+        {
+            var selectors = Resources.FindObjectsOfTypeAll<BrawlLootSelector>();
+            var sel = selectors.FirstOrDefault(x => string.IsNullOrEmpty(x.gameObject.scene.name)) ?? selectors.FirstOrDefault();
+            if (sel == null)
+                return;
+            sb.Append(",\n  \"brawl\": {\n    \"presets\": [");
+            sb.Append(string.Join(", ", (sel.lootPresets ?? new BrawlLootPreset[0]).Select(p =>
+                "{\"high\": " + Drops(p.highLoots) + ", \"med\": " + Drops(p.medLoots) + ", \"low\": " + Drops(p.lowLoots) +
+                ", \"attach\": " + Drops(p.attachLoot) + ", \"redo_chance\": " + F(p.redoChance) + "}")));
+            sb.Append("],\n    \"team_houses\": ").Append(Houses(sel.teamLootParent));
+            sb.Append(",\n    \"solo_houses\": ").Append(Houses(sel.soloLootParent));
+            sb.Append("\n  }");
         }
 
         /// <summary>

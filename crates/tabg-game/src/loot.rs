@@ -63,7 +63,7 @@ impl LootRules {
     }
 }
 
-fn pick_drop<'a>(drops: &'a [Drop], rng: &mut Rng) -> Option<&'a Drop> {
+pub(crate) fn pick_drop<'a>(drops: &'a [Drop], rng: &mut Rng) -> Option<&'a Drop> {
     let total: f32 = drops.iter().map(|d| d.weight.max(0.0)).sum();
     let roll = rng.range(0.0, total);
     let mut acc = 0.0;

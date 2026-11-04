@@ -48,6 +48,20 @@ const BUILTIN: &[(&str, &str)] = &[
         "armed-drop",
         include_str!("../../../presets/armed-drop.toml"),
     ),
+    (
+        "deathmatch",
+        include_str!("../../../presets/deathmatch.toml"),
+    ),
+    ("gun-game", include_str!("../../../presets/gun-game.toml")),
+    (
+        "shooting-range",
+        include_str!("../../../presets/shooting-range.toml"),
+    ),
+    (
+        "island-gun-game",
+        include_str!("../../../presets/island-gun-game.toml"),
+    ),
+    ("brawl", include_str!("../../../presets/brawl.toml")),
 ];
 
 fn parse(id: &str, text: &str, builtin: bool) -> Result<Preset, String> {
@@ -155,6 +169,20 @@ pub fn save(
 mod tests {
     use super::*;
     use crate::config::Teams;
+
+    #[test]
+    fn every_preset_file_is_built_in() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../presets");
+        let mut files: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.path().file_stem()?.to_str().map(str::to_owned))
+            .collect();
+        files.sort();
+        let mut builtin: Vec<String> = BUILTIN.iter().map(|(id, _)| (*id).to_owned()).collect();
+        builtin.sort();
+        assert_eq!(builtin, files);
+    }
 
     #[test]
     fn builtins_parse_and_produce_valid_configs() {

@@ -70,6 +70,39 @@ pub struct LootDrop {
 }
 
 /// A match modifier ("Normal game", "Medieval", …): its rarity and its loot preset.
+/// One Brawl loot preset: drops per spot tier; one preset is drawn per round.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BrawlPreset {
+    pub high: Vec<LootDrop>,
+    pub med: Vec<LootDrop>,
+    pub low: Vec<LootDrop>,
+    pub attach: Vec<LootDrop>,
+    #[serde(default)]
+    pub redo_chance: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct HouseLoot {
+    /// `High`, `Med`, `Low` or `Attach`.
+    pub tier: String,
+    pub position: [f32; 3],
+}
+
+/// A Brawl spawn house: where its team spawns and its loot spots (same order in every house).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BrawlHouse {
+    pub loot: Vec<HouseLoot>,
+    pub spawns: Vec<SpawnPoint>,
+}
+
+/// Brawl map data (from a dump of the dedicated server in Brawl mode).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BrawlData {
+    pub presets: Vec<BrawlPreset>,
+    pub team_houses: Vec<BrawlHouse>,
+    pub solo_houses: Vec<BrawlHouse>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct MatchModifier {
     pub index: u8,
@@ -134,6 +167,9 @@ pub struct World {
     /// Item ids that are grenades (thrown, not left as loot).
     #[serde(default)]
     pub grenades: Vec<i32>,
+    /// Only in dumps made in Brawl mode.
+    #[serde(default)]
+    pub brawl: Option<BrawlData>,
 }
 
 impl World {

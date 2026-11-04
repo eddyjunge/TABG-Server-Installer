@@ -41,6 +41,8 @@ pub struct Install {
     pub world: Option<PathBuf>,
     /// Game version of that map data (`APP_VERSION`).
     pub app_version: String,
+    /// Brawl map data (a second export with the server in Brawl mode).
+    pub brawl_world: Option<PathBuf>,
 }
 
 impl Install {
@@ -131,9 +133,11 @@ const SKIP: &[&str] = &[
     "tabg-world.json",
 ];
 
-/// game_settings.txt for the dump run: a private, direct-IP server on an unusual port.
-fn dump_settings(original: &str) -> String {
+/// game_settings.txt for the dump run: a private, direct-IP server on an unusual port, in
+/// `mode` (TABG's `GameMode` name).
+fn dump_settings(original: &str, mode: &str) -> String {
     let overrides = [
+        ("GameMode", mode.to_string()),
         ("ServerName", "tabg map export".to_string()),
         ("Port", DUMP_PORT.to_string()),
         ("Relay", "false".into()),
@@ -153,10 +157,12 @@ fn dump_settings(original: &str) -> String {
     out.join("\n") + "\n"
 }
 
-/// Run the map dumper against the dedicated server at `server_dir`; returns the world file.
+/// Run the map dumper against the dedicated server at `server_dir` in game mode `mode`
+/// (`BattleRoyale`, `Brawl`); returns the world file.
 pub fn dump_world(
     paths: &Paths,
     server_dir: &Path,
+    mode: &str,
     progress: &mut dyn FnMut(&str),
 ) -> Result<PathBuf, String> {
     if !steam::is_server(server_dir) {
@@ -182,8 +188,11 @@ pub fn dump_world(
     }
     let original =
         std::fs::read_to_string(server_dir.join("game_settings.txt")).unwrap_or_default();
-    std::fs::write(work.join("game_settings.txt"), dump_settings(&original))
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        work.join("game_settings.txt"),
+        dump_settings(&original, mode),
+    )
+    .map_err(|e| e.to_string())?;
 
     progress("getting BepInEx 5.4.23.3");
     let zip = fetch::download(BEPINEX.0, BEPINEX.1, &paths.downloads())?;
@@ -256,15 +265,28 @@ pub fn dump_world(
     } else {
         world.app_version.clone()
     };
-    let cached = paths.world_cache().join(format!("{version}.json"));
+    let suffix = if mode == "BattleRoyale" {
+        String::new()
+    } else {
+        format!("-{}", mode.to_ascii_lowercase())
+    };
+    let cached = paths.world_cache().join(format!("{version}{suffix}.json"));
     std::fs::create_dir_all(paths.world_cache()).map_err(|e| e.to_string())?;
     std::fs::copy(&out, &cached).map_err(|e| e.to_string())?;
-    progress(&format!(
-        "map data ready: {} spawn points, {} loot spots, {} cars",
-        world.spawn_points.len(),
-        world.loot_spots.len(),
-        world.cars.len()
-    ));
+    progress(&match &world.brawl {
+        Some(b) => format!(
+            "Brawl map data ready: {} team houses, {} solo houses, {} loot presets",
+            b.team_houses.len(),
+            b.solo_houses.len(),
+            b.presets.len()
+        ),
+        None => format!(
+            "map data ready: {} spawn points, {} loot spots, {} cars",
+            world.spawn_points.len(),
+            world.loot_spots.len(),
+            world.cars.len()
+        ),
+    });
     Ok(cached)
 }
 
@@ -287,11 +309,20 @@ pub fn run(paths: &Paths, force: bool, progress: &mut dyn FnMut(&str)) -> Result
     };
     progress(&format!("TABG Dedicated Server: {}", server.display()));
     if force || !install.ready() {
-        let world = dump_world(paths, &server, progress)?;
+        let world = dump_world(paths, &server, "BattleRoyale", progress)?;
         install.app_version = tabg_world::World::load(&world)
             .map(|w| w.app_version)
             .unwrap_or_default();
         install.world = Some(world);
+    }
+    if force || install.brawl_world.as_deref().is_none_or(|p| !p.exists()) {
+        progress("exporting the Brawl map too");
+        match dump_world(paths, &server, "Brawl", progress) {
+            Ok(w) => install.brawl_world = Some(w),
+            Err(e) => progress(&format!(
+                "Brawl map export failed (Brawl won't be available): {e}"
+            )),
+        }
     } else {
         progress("map data already extracted (use --force to redo it)");
     }
@@ -305,7 +336,11 @@ mod tests {
 
     #[test]
     fn dump_settings_override_network_keys() {
-        let s = dump_settings("ServerName=Mine\nPort=7777\nMaxPlayers=70\n");
+        let s = dump_settings(
+            "ServerName=Mine\nPort=7777\nMaxPlayers=70\nGameMode=Test\n",
+            "Brawl",
+        );
+        assert!(s.contains("GameMode=Brawl") && !s.contains("GameMode=Test"));
         assert!(s.contains("MaxPlayers=70"));
         assert!(s.contains("Port=47999"));
         assert!(s.contains("Relay=false"));

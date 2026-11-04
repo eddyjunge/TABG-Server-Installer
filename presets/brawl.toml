@@ -1,0 +1,19 @@
+title = "Brawl"
+description = "TABG's Brawl: teams start in spawn houses on the castle map with the same loot, the doors open, and a wiped team respawns. First team to 20 kills wins."
+
+[config.game]
+mode = "brawl"
+map = "island"
+teams = "squad"
+players_to_start = 2
+countdown = 20
+
+[config.rules]
+respawn = false
+respawn_delay = 3
+kills_to_win = 20
+time_limit = 0
+gun_game = []
+
+[config]
+loadout = []

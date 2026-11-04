@@ -363,6 +363,22 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                     h2 style="margin-top:0" { "Match" }
                     div.grid {
                         div {
+                            label { "Mode" }
+                            select name="game_mode" {
+                                option value="battle_royale" selected[g.mode == GameMode::BattleRoyale] { "Battle Royale" }
+                                option value="test" selected[g.mode == GameMode::Test] { "Test (no plane, no ring)" }
+                                option value="brawl" selected[g.mode == GameMode::Brawl] { "Brawl (castle, spawn houses)" }
+                            }
+                        }
+                        div {
+                            label { "Map" }
+                            select name="map" {
+                                option value="island" selected[g.map == Map::Island] { "Island" }
+                                option value="range" selected[g.map == Map::Range] { "Shooting range (range-map mod)" }
+                                option value="dev_test" selected[g.map == Map::DevTest] { "DevTest island (dev-test-map mod)" }
+                            }
+                        }
+                        div {
                             label { "Teams" }
                             select name="teams" {
                                 option value="solo" selected[g.teams == Teams::Solo] { "Solo" }
@@ -379,6 +395,15 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                         (field("Tick rate", "tick_rate", g.tick_rate, "Movement updates per second."))
                     (field("Voice range (m)", "voice_range", g.voice_range, "For friends with the ProximityChat mod; 0: off."))
                     (check("Allow any outfit (custom-game-skins mod)", "skins", g.skins))
+                    }
+                }
+                div.card {
+                    h2 style="margin-top:0" { "Rules" }
+                    div.grid {
+                        (check("Respawn after dying (deathmatch)", "respawn", c.rules.respawn))
+                        (field("Respawn delay (s)", "respawn_delay", c.rules.respawn_delay, ""))
+                        (field("Kills to win", "kills_to_win", c.rules.kills_to_win, "With respawns or Brawl; 0: no limit."))
+                        (field("Time limit (s)", "time_limit", c.rules.time_limit, "With respawns; 0: none. Most kills wins."))
                     }
                 }
                 div.row { button { "Save and apply" } span id="result" {} }
@@ -633,6 +658,7 @@ fn settings_from_form(
     c.network.public = f.contains_key("public");
     c.game.mode = match f.get("game_mode").map(String::as_str) {
         Some("test") => GameMode::Test,
+        Some("brawl") => GameMode::Brawl,
         _ => GameMode::BattleRoyale,
     };
     c.game.map = match f.get("map").map(String::as_str) {

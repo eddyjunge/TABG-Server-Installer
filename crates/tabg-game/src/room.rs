@@ -637,7 +637,8 @@ impl Room {
     }
 
     fn world_state(&mut self, peer: u8) -> Vec<Outgoing> {
-        let spawn = self.next_spawn_point();
+        let group = self.players.get(&peer).map_or(0, |p| p.group);
+        let spawn = self.spawn_for(group);
         let Some(player) = self.players.get_mut(&peer) else {
             return Vec::new();
         };
@@ -709,6 +710,27 @@ impl Room {
             EventCode::Login,
             world.encode(s.game_mode),
         )]
+    }
+
+    fn solo(&self) -> bool {
+        self.settings.match_mode == tabg_protocol::messages::match_mode::SOLO
+    }
+
+    fn is_brawl(&self) -> bool {
+        self.settings.game_mode == tabg_protocol::messages::game_mode::BRAWL
+            && !self.settings.brawl.houses.is_empty()
+    }
+
+    /// Where a player of `group` (re)spawns: their Brawl house, else the next spawn point.
+    fn spawn_for(&mut self, group: u8) -> SpawnPoint {
+        if self.is_brawl()
+            && let Some(house) = self.settings.brawl.house(self.solo(), group)
+            && !house.spawns.is_empty()
+        {
+            let i = self.rng.index(house.spawns.len());
+            return house.spawns[i];
+        }
+        self.next_spawn_point()
     }
 
     fn next_spawn_point(&mut self) -> SpawnPoint {
@@ -1492,6 +1514,17 @@ impl Room {
             ring_death,
         };
         let mut out = vec![Self::broadcast(EventCode::PlayerDead, dead.encode())];
+        if self.is_brawl() {
+            // A wiped team comes back at its house (official `BrawlGameMode.TeamDead`).
+            if !self.players.values().any(|m| m.group == group && m.alive) {
+                let at = self.last_now.unwrap_or(0.0)
+                    + self.settings.respawn.map_or(3.0, |r| r.delay.max(0.0));
+                for m in self.players.values_mut().filter(|m| m.group == group) {
+                    m.respawn_at = Some(at);
+                }
+            }
+            return out;
+        }
         if let Some(respawn) = self.settings.respawn {
             let now = self.last_now.unwrap_or(0.0);
             if let Some(p) = self.players.get_mut(&victim) {
@@ -1603,7 +1636,10 @@ impl Room {
 
     /// Somewhere on the ground inside the ring: a random loot spot (they sit on floors and
     /// terrain), else a lobby spawn.
-    fn respawn_position(&mut self) -> [f32; 3] {
+    fn respawn_position(&mut self, group: u8) -> [f32; 3] {
+        if self.is_brawl() {
+            return self.spawn_for(group).position;
+        }
         let (c, r) = (self.ring.white_center, self.ring.white_size * 0.45);
         let inside: Vec<[f32; 3]> = self
             .settings
@@ -1640,7 +1676,8 @@ impl Room {
             .collect();
         let mut out = Vec::new();
         for peer in due {
-            let position = self.respawn_position();
+            let group = self.players[&peer].group;
+            let position = self.respawn_position(group);
             let rotation = self.rng.range(0.0, 360.0);
             let p = self.players.get_mut(&peer).expect("listed above");
             p.respawn_at = None;
@@ -1668,6 +1705,25 @@ impl Room {
             out.extend(self.give_loadout(peer));
         }
         out
+    }
+
+    /// Brawl: first team to `kills_to_win`, or the last team left (official `BrawlGameMode`).
+    fn brawl_winner(&self) -> Option<u8> {
+        let mut team_kills: BTreeMap<u8, u32> = BTreeMap::new();
+        for p in self.players.values() {
+            *team_kills.entry(p.group).or_default() += u32::from(p.kills);
+        }
+        let best = team_kills
+            .iter()
+            .max_by_key(|(_, k)| **k)
+            .map(|(&t, &k)| (t, k));
+        let limit = u32::from(self.settings.kills_to_win.max(1));
+        match best {
+            Some((team, kills)) if kills >= limit => Some(team),
+            Some((team, _)) if team_kills.len() <= 1 => Some(team),
+            None => Some(GameStateChanged::NO_WINNER),
+            _ => None,
+        }
     }
 
     /// With respawns: has a team reached the kill limit, finished gun game, or is time up?
@@ -1780,7 +1836,10 @@ impl Room {
                 }
                 let ring_events = self.ring.tick(now, &mut self.rng);
                 out.extend(Self::ring_events(ring_events));
-                let winner = if self.settings.respawn.is_some() {
+                let winner = if self.is_brawl() {
+                    out.extend(self.respawn_due(now));
+                    self.brawl_winner()
+                } else if self.settings.respawn.is_some() {
                     out.extend(self.respawn_due(now));
                     self.respawn_winner(now)
                 } else {
@@ -1841,6 +1900,28 @@ impl Room {
             LootWorld::spawn(&self.settings.loot, self.settings.loot_keep, &mut self.rng);
         self.modifier = modifier;
         self.loot = loot;
+        if self.is_brawl() {
+            // Brawl: same loot in every house, then the doors open (official `OpenDoors`).
+            self.loot = self.settings.brawl.spawn_loot(self.solo(), &mut self.rng);
+            self.state = game_state::STARTED;
+            self.events.push(RoomEvent::MatchState {
+                state: "started".into(),
+            });
+            let mut out = vec![Self::state_changed(GameStateChanged::Other(
+                game_state::OPEN_DOORS,
+            ))];
+            let peers: Vec<u8> = self.players.keys().copied().collect();
+            for &peer in &peers {
+                let p = self.players.get_mut(&peer).expect("listed");
+                p.dropped = true;
+                p.landed = true;
+            }
+            for peer in peers {
+                out.extend(self.force_chunk_entry(peer));
+                out.extend(self.give_loadout(peer));
+            }
+            return out;
+        }
         if self.settings.game_mode == tabg_protocol::messages::game_mode::TEST {
             // Test mode: no plane and no ring; everyone plays from where they stand.
             self.state = game_state::STARTED;
@@ -3465,5 +3546,77 @@ mod tests {
                 .payload[6],
             2
         );
+    }
+
+    fn brawl_settings() -> RoomSettings {
+        let house = |x: f32| crate::brawl::House {
+            spawns: vec![SpawnPoint {
+                position: [x, 130.0, 0.0],
+                rotation: 0.0,
+            }],
+            loot: vec![(crate::brawl::HIGH, [x, 131.0, 1.0])],
+        };
+        RoomSettings {
+            game_mode: tabg_protocol::messages::game_mode::BRAWL,
+            kills_to_win: 2,
+            brawl: crate::brawl::BrawlRules {
+                houses: vec![house(0.0), house(300.0)],
+                solo_houses: Vec::new(),
+                presets: vec![crate::brawl::Preset {
+                    tiers: [
+                        vec![crate::loot::Drop {
+                            weight: 1.0,
+                            items: vec![(152, 1)],
+                        }],
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    ],
+                    redo_chance: 0.0,
+                }],
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn brawl_houses_doors_loot_and_team_respawns() {
+        let mut room = Room::new(RoomSettings {
+            countdown: 1.0,
+            players_to_start: 2,
+            ..brawl_settings()
+        });
+        for (peer, squad) in [(0u8, 1u64), (1, 2)] {
+            room.connect(peer);
+            let req = RoomInitRequest {
+                player_name: format!("p{peer}"),
+                squad_id: squad,
+                ..Default::default()
+            };
+            room.handle(peer, &Packet::new(EventCode::RoomInit, req.encode()));
+            let w = enter(&mut room, peer);
+            let house_x = if room.players[&peer].group % 2 == 0 {
+                0.0
+            } else {
+                300.0
+            };
+            assert_eq!(w.position[0], house_x, "spawned in the team's house");
+        }
+        let out = run(&mut room, 0.0, 1.5);
+        assert_eq!(room.state(), game_state::STARTED);
+        let doors = events(&out, EventCode::GameStateChanged);
+        assert_eq!(
+            doors.last().unwrap().packet.payload,
+            vec![game_state::OPEN_DOORS]
+        );
+        assert!(events(&out, EventCode::PlaneUpdate).is_empty());
+        assert_eq!(room.loot().len(), 2, "the same AK in both houses");
+        // A wiped (solo) team comes back at its house; two kills win.
+        hit(&mut room, 0, 1, 0.0);
+        let out = run(&mut room, 1.5, 5.0);
+        assert_eq!(events(&out, EventCode::PlayerRespawn).len(), 1);
+        hit(&mut room, 0, 1, 0.0);
+        run(&mut room, 5.0, 5.5);
+        assert_eq!(room.state(), game_state::ENDED);
     }
 }
