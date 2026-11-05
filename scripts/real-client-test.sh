@@ -12,6 +12,8 @@
 #   TABG_TEST_SERVER_ARGS extra tabg-server flags (e.g. "--loadout 160:1,6:240")
 #   TABG_TEST_HEAL    item id the client heals with once it's hurt (e.g. 131 = bandage)
 #   TABG_TEST_DROP    "item:count@seconds" the client drops (e.g. "132:1@80")
+#   TABG_TEST_WINDOW=1 show the game window and play sound (default: no window, no sound, no
+#                     screenshots: Unity -batchmode -nographics, Wine audio off)
 #   TABG_TEST_RELAY=1 host through Unity Relay and join by code (needs internet) instead of 127.0.0.1
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -67,7 +69,12 @@ fi
   export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/823130"
   export STEAM_COMPAT_APP_ID=823130 SteamAppId=823130 SteamGameId=823130
   export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN="$JOIN" TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}" TABG_AUTOJOIN_HEAL="${TABG_TEST_HEAL:-}" TABG_AUTOJOIN_DROP="${TABG_TEST_DROP:-}"
-  exec "$PROTON" run "$TEST/TotallyAccurateBattlegrounds.exe" > "$PWD/../client-proton.log" 2>&1
+  GAME_ARGS=()
+  if [[ -z "${TABG_TEST_WINDOW:-}" ]]; then
+    GAME_ARGS=(-batchmode -nographics)
+    export WINEDLLOVERRIDES="$WINEDLLOVERRIDES;winepulse.drv=d;winealsa.drv=d"
+  fi
+  exec "$PROTON" run "$TEST/TotallyAccurateBattlegrounds.exe" "${GAME_ARGS[@]}" > "$PWD/../client-proton.log" 2>&1
 ) &
 CLIENT=$!
 # A headless second player walks circles a few metres in front of the first lobby spawn, so the

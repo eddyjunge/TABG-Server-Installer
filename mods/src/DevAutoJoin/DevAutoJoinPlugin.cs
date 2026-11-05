@@ -230,7 +230,8 @@ namespace Tabg.DevAutoJoin
                 FindObjectOfType<PhotonServerHandler>()?.SendChatMessage(_chatText);
             }
             TickInventory();
-            if (_shot < _shotTimes.Length && _sinceJoin >= _shotTimes[_shot])
+            // -batchmode -nographics (the test script's default) has nothing to capture.
+            if (!Application.isBatchMode && _shot < _shotTimes.Length && _sinceJoin >= _shotTimes[_shot])
             {
                 string path = Path.Combine(Paths.BepInExRootPath, $"autojoin-{_shot}.png");
                 ScreenCapture.CaptureScreenshot(path);

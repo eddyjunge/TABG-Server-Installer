@@ -459,7 +459,9 @@ impl Room {
             ) => {
                 let relayed = match event {
                     EventCode::WeaponChange => {
-                        self.track_equipment(peer, &packet.payload);
+                        if !self.track_equipment(peer, &packet.payload) {
+                            return Vec::new();
+                        }
                         EventCode::WeaponChanged
                     }
                     other => other,
@@ -1487,7 +1489,9 @@ impl Room {
 
     /// Remember what a player holds, from `WeaponChange`
     /// (`[player, slot, w1, w1 attachment, w2, w2 attachment, w3, n, attachments…]`).
-    fn track_equipment(&mut self, peer: u8, payload: &[u8]) {
+    /// With `game.inventory_check`, the weapons must be ones the player got; `false` refuses the
+    /// change (enforce only).
+    fn track_equipment(&mut self, peer: u8, payload: &[u8]) -> bool {
         let mut r = tabg_protocol::Reader::new(payload);
         let parsed = (|| -> Result<_, tabg_protocol::DecodeError> {
             let (index, slot) = (r.u8()?, r.u8()?);
@@ -1502,10 +1506,22 @@ impl Room {
             Ok((index, slot, shorts, attachments))
         })();
         let Ok((index, slot, w, attachments)) = parsed else {
-            return;
+            return true;
         };
-        let Some(p) = self.players.get_mut(&peer).filter(|_| index == peer) else {
-            return;
+        if index != peer {
+            return true;
+        }
+        for weapon in [w[0], w[2], w[4]] {
+            if weapon >= 0
+                && self
+                    .inventory_checked(peer, "equip", i32::from(weapon), 1)
+                    .is_none()
+            {
+                return false;
+            }
+        }
+        let Some(p) = self.players.get_mut(&peer) else {
+            return true;
         };
         p.equipment = [w[0], w[1], w[2], w[3], w[4], i16::from(slot)];
         p.attachments = attachments;
@@ -1515,6 +1531,7 @@ impl Room {
             2 => i32::from(w[2]),
             _ => i32::from(w[4]),
         };
+        true
     }
 
     fn airplane_drop(&mut self, peer: u8, req: RequestAirplaneDrop) -> Vec<Outgoing> {
@@ -3410,6 +3427,33 @@ mod tests {
             room.handle(0, &Packet::new(EventCode::RequestHealing, heal.encode()))
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn inventory_check_covers_equipped_weapons() {
+        use crate::settings::InventoryCheck;
+        let change = |weapon: i16| {
+            let mut w = tabg_protocol::Writer::new();
+            w.u8(0).u8(1);
+            for v in [weapon, -1, -1, -1, -1] {
+                w.u16(v as u16);
+            }
+            w.u8(0);
+            Packet::new(EventCode::WeaponChange, w.into_inner())
+        };
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        room.settings.inventory_check = InventoryCheck::Enforce;
+        assert!(room.handle(0, &change(160)).is_empty(), "never picked up");
+        room.inventory_add(0, 160, 1);
+        assert_eq!(
+            events(&room.handle(0, &change(160)), EventCode::WeaponChanged).len(),
+            1
+        );
+        assert_eq!(
+            events(&room.handle(0, &change(-1)), EventCode::WeaponChanged).len(),
+            1,
+            "empty hands are always fine"
         );
     }
 
