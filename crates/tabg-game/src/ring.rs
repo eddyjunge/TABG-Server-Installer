@@ -68,6 +68,9 @@ pub struct Ring {
     pub id: usize,
     pub white_center: [f32; 3],
     pub white_size: f32,
+    /// The ring the storm currently stands at (it shrinks from here to the white ring).
+    blue_center: [f32; 3],
+    blue_size: f32,
     phase: Phase,
 }
 
@@ -78,12 +81,34 @@ impl Ring {
         let mut ring = Self {
             white_center: rules.center,
             white_size: first_size,
+            blue_center: rules.center,
+            blue_size: first_size,
             id: 0,
             rules,
             phase: Phase::Idle,
         };
         ring.advance(rng);
         ring
+    }
+
+    /// Where the storm's edge is now: centre and diameter (moving linearly towards the white
+    /// ring while it shrinks, like the client draws it).
+    pub fn current(&self, now: f32) -> ([f32; 3], f32) {
+        match self.phase {
+            Phase::Moving { since, duration } => {
+                let t = ((now - since) / duration.max(0.01)).clamp(0.0, 1.0);
+                let lerp = |a: f32, b: f32| a + (b - a) * t;
+                (
+                    [
+                        lerp(self.blue_center[0], self.white_center[0]),
+                        lerp(self.blue_center[1], self.white_center[1]),
+                        lerp(self.blue_center[2], self.white_center[2]),
+                    ],
+                    lerp(self.blue_size, self.white_size),
+                )
+            }
+            _ => (self.blue_center, self.blue_size),
+        }
     }
 
     pub fn is_moving(&self) -> bool {
@@ -130,6 +155,8 @@ impl Ring {
         let mut events = Vec::new();
         match self.phase.clone() {
             Phase::Moving { since, duration } if now - since >= duration => {
+                self.blue_center = self.white_center;
+                self.blue_size = self.white_size;
                 let mut wait = self.rules.ring_times.get(self.id).copied().unwrap_or(20.0) + 20.0;
                 if self.id == 1 {
                     wait += 40.0;

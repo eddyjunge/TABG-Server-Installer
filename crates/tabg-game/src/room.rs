@@ -233,6 +233,7 @@ pub struct Room {
     next_drop_at: Option<f32>,
     /// Server-side players and their minds.
     bots: bots::Brains,
+    bot_ring_at: f32,
 }
 
 impl Room {
@@ -269,6 +270,7 @@ impl Room {
             drops: Vec::new(),
             next_drop_at: None,
             bots: BTreeMap::new(),
+            bot_ring_at: 0.0,
         };
         room.spawn_cars();
         room
@@ -4704,5 +4706,35 @@ mod tests {
             (room.players[&0].position[0] - at[0]).abs() < 0.01,
             "the driver goes with it"
         );
+    }
+
+    #[test]
+    fn the_storm_hurts_bots_outside_the_ring() {
+        let mut room = Room::new(RoomSettings {
+            bots: 1,
+            nav: Some(flat_island()),
+            players_to_start: 2,
+            countdown: 1.0,
+            ..Default::default()
+        });
+        join(&mut room, 0, "human");
+        enter(&mut room, 0);
+        run(&mut room, 0.0, 60.0);
+        let (centre, size) = room.ring.current(60.0);
+        let far = [centre[0] + size, 120.0, centre[2]];
+        let p = room.players.get_mut(&253).unwrap();
+        p.position = far;
+        p.landed = true;
+        let before = room.players[&253].health;
+        room.players.get_mut(&253).unwrap().position = far;
+        room.bot_ring_at = 0.0;
+        let out = room.tick(60.5);
+        assert!(room.players[&253].health < before, "{out:?}");
+        room.players.get_mut(&253).unwrap().health = 0.5;
+        room.players.get_mut(&253).unwrap().position = far;
+        room.bot_ring_at = 0.0;
+        let out = room.tick(61.6);
+        assert!(!room.players[&253].alive, "a ring death");
+        assert_eq!(events(&out, EventCode::PlayerDead).len(), 1);
     }
 }

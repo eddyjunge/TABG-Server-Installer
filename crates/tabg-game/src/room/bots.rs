@@ -31,6 +31,9 @@ const REACTION: (f32, f32) = (0.5, 0.7);
 /// Bot damage relative to the gun's damage, and the best hit chance at any range.
 const DAMAGE_SCALE: f32 = 0.7;
 const MAX_HIT_CHANCE: f32 = 0.5;
+/// Storm damage per second for bots outside the ring, by ring number (players' own clients
+/// apply theirs; bots have none).
+const RING_DAMAGE: [f32; 7] = [1.0, 1.0, 2.0, 3.0, 5.0, 8.0, 10.0];
 
 const NAMES: &[&str] = &[
     "Bot Alva",
@@ -250,6 +253,47 @@ impl Room {
         let bots: Vec<u8> = self.bots.keys().copied().collect();
         for bot in bots {
             out.extend(self.tick_bot(bot, now, dt, &nav));
+        }
+        if now >= self.bot_ring_at {
+            self.bot_ring_at = now + 1.0;
+            out.extend(self.bot_ring_damage(now));
+        }
+        out
+    }
+
+    /// Bots outside the storm's edge lose health every second, and die a ring death at 0.
+    fn bot_ring_damage(&mut self, now: f32) -> Vec<Outgoing> {
+        if self.settings.game_mode != game_mode::BATTLE_ROYALE || self.settings.test_map.is_some() {
+            return Vec::new();
+        }
+        let (centre, size) = self.ring.current(now);
+        let per_second = RING_DAMAGE[self.ring.id.min(RING_DAMAGE.len() - 1)];
+        let outside: Vec<u8> = self
+            .bots
+            .keys()
+            .copied()
+            .filter(|b| {
+                self.players.get(b).is_some_and(|p| {
+                    p.alive
+                        && p.landed
+                        && (p.position[0] - centre[0]).hypot(p.position[2] - centre[2]) > size * 0.5
+                })
+            })
+            .collect();
+        let mut out = Vec::new();
+        for bot in outside {
+            let p = self.players.get_mut(&bot).expect("filtered");
+            p.health = (p.health - per_second).max(0.0);
+            let health = p.health;
+            if health <= 0.0 {
+                out.extend(self.kill(bot, true));
+            } else {
+                out.push(Outgoing::reliable(
+                    Recipients::Many(self.near(bot)),
+                    EventCode::PlayerHealthStateChanged,
+                    tabg_protocol::actions::encode_player_health(bot, health),
+                ));
+            }
         }
         out
     }
