@@ -1,54 +1,316 @@
 <div align="center">
-<img src="logo/tabg-server-installer.svg" width="120" alt="">
 
-# tabg
+<pre>
+ _____                                                               _____
+( ___ )-------------------------------------------------------------( ___ )
+ |   |                                                               |   |
+ |   |  _____  _    ____   ____      ____                            |   |
+ |   | |_   _|/ \  | __ ) / ___|    / ___|  ___ _ ____   _____ _ __  |   |
+ |   |   | | / _ \ |  _ \| |  _     \___ \ / _ \ '__\ \ / / _ \ '__| |   |
+ |   |   | |/ ___ \| |_) | |_| |     ___) |  __/ |   \ V /  __/ |    |   |
+ |   |  _|_/_/   \_\____/ \____| _  |____/ \___|_|    \_/ \___|_|    |   |
+ |   |                                                               |   |
+ |   |           T A B G   S E R V E R   I N S T A L L E R           |   |
+ |___|                                                               |___|
+(_____)-------------------------------------------------------------(_____)
+</pre>
 
-**Host a Totally Accurate Battlegrounds server for your friends.**
+**Host a [Totally Accurate Battlegrounds](https://store.steampowered.com/app/823130/Totally_Accurate_Battlegrounds/) server for your friends, with one program.**
+
+[![GitHub release](https://img.shields.io/github/v/release/jonassneu/TABG-Server-Installer)](https://github.com/jonassneu/TABG-Server-Installer/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Made with Rust](https://img.shields.io/badge/made%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 
 </div>
 
-> **Status: rebuilding from scratch.** This repo is being rewritten as a single Rust program
-> with its own TABG game server. Nothing is usable yet. The previous C# installer (v5.2.0 and
-> earlier) is retired.
+---
 
-## The plan
+## About
 
-- **`tabg`**: one small program for Windows and Linux. Double-click it, a dashboard opens in
-  your browser, and a few minutes later you have a server and a join code for your friends.
-- **Our own game server in Rust**: unmodified TABG clients can join; no Unity server, SteamCMD
-  or BepInEx needed on the host.
-- **Optional client mods** (proximity chat, vehicles, maps…): friends run `tabg join <code>` once
-  and get exactly the mods the server uses.
+`tabg` is a single program for Windows and Linux. Run it and a dashboard opens in your browser. A few
+minutes later you have a TABG server and a join code you can send to your friends.
 
-The full design, decisions and milestones are in [docs/DESIGN.md](docs/DESIGN.md).
+It brings its **own TABG game server, written in Rust**. You don't need Landfall's Unity server,
+SteamCMD, BepInEx or Citruslib on the host. Friends join with their **normal, unmodified TABG**
+through the game's join-code field. If you turn on extras such as proximity voice, flying vehicles or
+the shooting range, friends run `tabg join <code>` once and get exactly the mods your server uses.
 
-## Repo layout
+> This is a full rewrite. The old C# installer (v5.2.0 and earlier, WPF launcher plus BepInEx
+> server plugins) is retired. Its features are now built into the server (see
+> [What happened to the old plugins](#what-happened-to-the-old-plugins)).
 
+## Requirements
+
+- Windows or Linux (x86-64).
+- **Host:** TABG and the free **TABG Dedicated Server** installed through Steam. tabg reads the map
+  data from your own install once during setup; nothing from the game is shipped with tabg.
+- **Friends:** TABG on Steam. That's all for the base game. For client extras, Steam must be running,
+  and Linux needs Proton.
+
+## Download
+
+1. Go to the [latest release](https://github.com/jonassneu/TABG-Server-Installer/releases/latest).
+2. Download `tabg-<version>-windows-x86_64.exe` or `tabg-<version>-linux-x86_64`.
+3. Put it anywhere and run it. It's one file of about 8 MB with nothing to install.
+
+No release exists yet for the rewrite. Until one does, [build it yourself](#building).
+
+## Quick Start
+
+### Server Setup
+
+1. Run `tabg`. The dashboard opens at `http://localhost:7780`.
+2. Click **Setup**. tabg finds your Steam libraries and exports the map data from the TABG Dedicated
+   Server. This takes about 10 seconds and only happens once per game version.
+3. Pick a preset on the **Presets** page, for example *Battle Royale*, *Gun Game* or *Deathmatch*.
+4. Click **Start**. The **Overview** page shows the join code.
+5. Send the join code to your friends. They enter it in TABG's join field.
+
+Everything also works from the command line:
+
+```bash
+tabg setup
+tabg preset apply gun-game
+tabg start
+tabg status          # join code, players
 ```
-crates/   Rust workspace: the tabg binary and (soon) the game server
-mods/     C# BepInEx client mods (optional extras), built locally against your own TABG install
-docs/     design documents
+
+### Client Setup (for players)
+
+Only needed if the host uses client extras. The dashboard's **Share** page then shows a share code
+(`TABG1-…`) next to the join code.
+
+1. Run `tabg join TABG1-…`.
+2. tabg makes a separate modded copy of your TABG (your Steam install is not touched), installs
+   BepInEx and exactly the mods the server uses, and checks every file's hash.
+3. Run `tabg launch` to start the modded copy. Don't launch it from Steam.
+
+When the host changes the mod list, run `tabg join` with the new code. Mods from an earlier join are
+removed.
+
+## Features
+
+### Core
+
+- **Own game server.** A Rust reimplementation of the TABG server. Vanilla clients connect to it
+  either through Unity Relay join codes (the same way the official server does it) or by direct IP
+  (`IP:7777`, with UPnP).
+- **Server list.** Optionally show up in TABG's community server list.
+- **Dashboard and CLI.** Status, join code, players, live console and quick actions, in the browser
+  or with `tabg …`.
+- **Crash recovery.** The game server runs as a child process. If it crashes, it is restarted with a
+  new join code and the crash log is kept.
+- **Backups.** Taken automatically before every config change (the last 50 are kept); one click
+  restores one.
+- **Share codes.** One code carries the join code plus the exact client mods, pinned by sha256.
+
+### Dashboard
+
+- **Overview.** Status, join code, players, start/stop/restart.
+- **Console.** Live server log, plus the same commands admins use in chat.
+- **Players.** Kick, ban, make admin, and player history (joins, kills, deaths, wins).
+- **Settings.** Name, password, mode, map, teams, players to start, countdown, loot, time of day,
+  bots, voice range, vehicles and network, all with validation.
+- **Loadout & Ring.** What everyone lands with, ring times, sizes and speeds, and gun game levels.
+- **Presets.** The built-in presets, plus your own saved ones.
+- **Share.** The client mod pack and the share code.
+- **Backups.** List and restore.
+
+The dashboard only listens on `127.0.0.1`, checks `Host` and `Origin`, and needs a session token, so
+websites in your browser can't control your server.
+
+### Game Modes
+
+| Mode | What it is |
+|---|---|
+| Battle Royale | Squads, plane drop, loot, ring, spell drops, souls, blessings and curses, revives |
+| Deathmatch | Respawn 5 s after dying, armed, inside the ring. First to 20 kills wins |
+| Gun Game | Every kill gives you the next weapon; the first kill with the last weapon wins |
+| Brawl | Teams start in spawn houses on the castle map with the same loot. First team to 20 kills wins |
+| Bomb | TABG_CS: buy guns, T plants, CT defuses, sides switch at half time |
+| Test | No plane or ring; used for the Shooting Range and the DevTest island |
+
+### Presets
+
+| Preset | Description | Client mods |
+|---|---|---|
+| Battle Royale | TABG as Landfall ships it: squads, 2 players to start, map loot and ring | none |
+| Solo Royale | Battle Royale where everyone fights alone | none |
+| Quick Match | Short countdown, more loot, and a ring that moves twice as fast | none |
+| Loot Frenzy | Four times the loot, and everyone lands with bandages | none |
+| Armed Drop | Everyone lands with an M16, ammo and heals | none |
+| Deathmatch | Respawns, first to 20 kills or most kills after 15 minutes | none |
+| Gun Game | 10 weapon levels, ending with the katana | none |
+| Brawl | Spawn houses on the castle map, first team to 20 kills | none |
+| Bomb | First to 7 rounds on TABG_CS | none |
+| Flying Vehicles | Battle Royale with helicopters, UFOs and hover taxis; `/vehicle` and `/fpv` for admins | `flying-controls` |
+| Shooting Range | WilhelmTest range with an all-items menu, respawn after 3 s | `range-map` |
+| Island Gun Game | Gun Game on the hidden DevTest island | `dev-test-map` |
+
+The client mods a preset needs are added to the share code automatically.
+
+### Bots
+
+Set `game.bots` and the server adds AI players. They are normal players to every client. Bots jump
+from the plane, land with a random gun, walk to the ring on the island's walkability grid, swim to
+shore, take storm damage, and fight anyone they can see. Their aim is fair: they hold fire for 5 s
+after landing, react after 0.5–1.2 s, hit at most half their shots, and do 70 % of the gun's damage.
+
+### Admin Commands
+
+Admins are set on the Players page or with `tabg admins add <name>`. These commands work in chat (with
+`/`) and in the dashboard console:
+
+| Command | What it does |
+|---|---|
+| `/start` | Start the match now |
+| `/say <text>` | Message everyone |
+| `/players` | List players |
+| `/kick <name>` · `/ban <name>` | Kick or ban (bans are saved to `tabg.toml`) |
+| `/give <item> [qty]` | Drop an item next to you |
+| `/heal` | Full health |
+| `/vehicles` · `/vehicle <name>` | List vehicles, or spawn one in front of you (FlyingControls players) |
+| `/fpv` | Get an FPV drone |
+
+## Client Mods
+
+All of them are optional. Friends get them through the share code, never by hand.
+
+| Mod | Catalog id | Description | Key |
+|---|---|---|---|
+| ProximityChat | `proximity-chat` | Voice chat with nearby players, over the game's own connection | |
+| FlyingControls | `flying-controls` | Fly helicopters and UFOs, fire missiles, FPV drones, call hover taxis | |
+| RangeMap | `range-map` | Loads the WilhelmTest shooting range, with a searchable all-items menu | F6 |
+| DevTestMap | `dev-test-map` | Loads the hidden DevTest island, with a searchable all-items menu | F6 |
+| CustomGameSkins | `custom-game-skins` | Wardrobe with every built-in skin, only on servers that allow it | F7 |
+| AdminRadar | `admin-radar` | Bot radar: shows **bots only**, never real players | F4 |
+| CustomGrenades | `custom-grenades` | Big Smoke grenade effects and MGL flashbangs | |
+| CoordsDisplay | `coords-display` | Coordinate overlay | F5 |
+| ModSettings | `mod-settings` | In-game settings for the other mods | F9 |
+| PerformanceClient | `performance-client` | FPS, culling, streaming and network optimizations, with a frame-time overlay | F10 |
+| PopupBlocker | `popup-blocker` | Hides the anti-cheat popups in the modded copy | |
+
+## Proximity Voice Chat
+
+Voice travels over the game's existing network connection. No extra ports and no voice server are
+needed.
+
+- The client sends 16 kHz voice frames (event 240).
+- The server checks each frame, limits it to 60 frames per second per speaker, stamps the real
+  sender, and passes it only to living players within `game.voice_range` (50 m by default; 0 turns it
+  off).
+- Voice activation uses a sensitivity threshold. Push-to-talk is optional.
+- Turning the mod off stops the microphone right away.
+
+## Flying Vehicles
+
+Set `game.unused_vehicles` (or apply the *Flying Vehicles* preset). The vehicles Landfall built but
+never put on the map (helicopters, UFOs, hover bikes and cars, buggies) then spawn next to the
+normal cars, up to `game.unused_vehicles_max`.
+
+- **Helicopters** have their own health (30 in the air, 300 on the ground). A hard crash destroys
+  them, and when the pilot leaves, a passenger takes over.
+- **Missiles** lock on in 0.65 s and fly guided or straight. The server flies them and checks every
+  hit. Three bullets shoot one down.
+- **FPV drones** (`/fpv`) fly for 60 s with a range of 1 km. The server checks every move.
+- **Hover taxis**: pick a destination and the server flies you along the roads, with a short boost.
+
+Vanilla players see the map vehicles. Flying them needs FlyingControls.
+
+## Multiplayer Shooting Range
+
+Apply the **Shooting Range** preset. Every player who joins with the share code loads TABG's built-in
+`WilhelmTest` range instead of the island. Press **F6** to take any item, and you respawn 3 s after
+dying.
+
+## Island Gun Game
+
+Apply the **Island Gun Game** preset. You play Gun Game on TABG's hidden DevTest island, with **F6**
+all-items and unlimited respawns.
+
+## Custom Game All Skins
+
+Set `game.skins = true` (it's off by default) and add `custom-game-skins` to the client mods. Press
+**F7** in game to search every built-in skin, pick colours, or randomize an outfit. The server checks
+each outfit, limits how often it can change, and shows it to everyone as normal gear.
+
+It doesn't buy anything, doesn't change your PlayFab inventory or saved outfit, and stays locked on
+servers that haven't enabled it.
+
+## Configuration
+
+Each server is one `tabg.toml`. The dashboard and the CLI both edit it, and lobby rules reload
+without a restart. Unknown keys are errors, so typos don't go unnoticed.
+
+```bash
+tabg config show
+tabg config set game.max_players 24
+tabg config set game.bots 10
+tabg config set network.public true      # show in the community server list
 ```
+
+```toml
+name = "tabg server"
+preset = "battle-royale"
+loadout = [                  # what everyone lands with
+  { item = 160, qty = 1 },   # M16
+  { item = 6, qty = 240 },   # Normal Ammo
+]
+
+[network]
+mode = "relay"               # join codes; "direct" for IP:port
+port = 7777
+upnp = true
+
+[game]
+mode = "battle_royale"
+map = "island"
+teams = "squad"
+max_players = 70
+players_to_start = 2
+bots = 0
+voice_range = 50.0
+unused_vehicles = 0.0
+
+[players]
+admins = []
+banned = []
+
+[mods]
+client = []                  # e.g. ["proximity-chat", "flying-controls"]
+```
+
+Data lives in `~/.local/share/tabg` (Linux) or `%APPDATA%\tabg` (Windows).
+
+## What happened to the old plugins
+
+| Old BepInEx plugin | Now |
+|---|---|
+| Citruslib, AntiCheatBypass, SteamCMD, EOS DLL copy | Not needed |
+| MatchCore (rings, loadouts, drops, spell drops, win rules) | Built into the server: Settings, Loadout & Ring, Rules |
+| ServerLogger | Player history on the Players page |
+| SoloTesting | `game.players_to_start = 1` |
+| ProximityChat server | Built-in voice relay |
+| RangeMap / DevTestMap servers | `game.map = "range"` / `"dev_test"` |
+| CustomGameSkins server | `game.skins` (opt-in) |
+| FakePlayers | `game.bots` |
+| DummyDebugRadar | `game.bot_radar` (bots only) |
+| UnusedVehicles | `game.unused_vehicles` |
+| PerformanceServer | Not needed: the Rust server is efficient on its own |
+| EnhancedClient, StarterPack, WeaponSpawnConfig, TestMod | Dropped |
 
 ## Building
 
+You need [Rust](https://rustup.rs/) 1.85 or newer. The client mods also need the .NET SDK.
+
 ```bash
-cargo build                 # the tabg tool
-cargo run --release -p tabg-server   # dev: run our game server on UDP 7777
-cargo run --release -p tabg-probe -- --host 127.0.0.1   # headless client that joins and reports
+cargo build --release -p tabg            # target/release/tabg
+scripts/build-release.sh                 # Linux + Windows release binaries into target/dist/
 
-# map data: export spawn points from your own server install (offline), then use them
-scripts/dump-world.sh ~/.local/share/Steam/steamapps/common/TotallyAccurateBattlegroundsDedicatedServer
-cargo run --release -p tabg-server -- --world target/tabg-world.json
-
-# ground truth: run Landfall's own server offline (network namespace) and probe it
-scripts/reference-server.sh ~/.local/share/Steam/steamapps/common/TotallyAccurateBattlegroundsDedicatedServer
-
-# client mods: point at a modded TABG client copy that has BepInEx installed
-export TABG_CLIENT_DIR=~/.local/share/Steam/steamapps/common/TotallyAccurateBattlegrounds-Modded
+# client mods: point at a TABG client copy that has BepInEx installed
+export TABG_CLIENT_DIR=~/.local/share/tabg/test-client
 dotnet build mods/Mods.sln -c Release
-dotnet test mods/tests/ClientMods.Tests
-dotnet run --project mods/tests/Vehicles.Tests
+scripts/release-mods.sh                  # mod catalog into target/mods-dist/
 ```
 
 Game, Unity and BepInEx assemblies are never committed. The mods compile against your own install.
@@ -56,14 +318,76 @@ Game, Unity and BepInEx assemblies are never committed. The mods compile against
 There is no CI. Run all checks locally before pushing:
 
 ```bash
-scripts/check.sh          # Rust + vehicle rules
-scripts/check.sh --mods   # also the C# client mods
+scripts/check.sh          # Rust: fmt, clippy, tests
+scripts/check.sh --mods   # also the C# client mods and their tests
 ```
 
-## Legal
+Developer tools:
 
-tabg is an unofficial fan project, not affiliated with Landfall Games. It contains no Landfall code
-or assets; map data is extracted from your own copy of the game on your machine. MIT licensed.
+```bash
+cargo run --release -p tabg-server -- --world target/tabg-world.json   # just the game server
+cargo run --release -p tabg-probe -- --host 127.0.0.1                  # headless test client
+scripts/reference-server.sh <dedicated-server-dir>  # Landfall's server, offline, as ground truth
+scripts/real-client-test.sh                         # the real client joins automatically
+```
 
-Third-party code: `crates/tabg-enet-sys/vendor` contains ENet-CSharp 2.4.8 (MIT, © Stanislav Denisov and
-the ENet authors).
+The design, all decisions and the milestones are in [docs/DESIGN.md](docs/DESIGN.md).
+
+### Repo layout
+
+```
+crates/   Rust workspace: tabg (CLI), tabg-host, tabg-web (dashboard), tabg-server and
+          tabg-game (the game server), tabg-protocol, tabg-net, tabg-utp (relay), tabg-world
+mods/     C# BepInEx client mods and the map dumper
+presets/  built-in presets
+scripts/  build, release and test scripts
+docs/     design
+```
+
+## Disclaimer
+
+This software is provided **as-is** with no warranty of any kind. Use at your own risk.
+
+- This project is **not affiliated with, endorsed by, or associated with**
+  [Landfall Games](https://landfall.se/) or Totally Accurate Battlegrounds in any way.
+- tabg contains no Landfall code or assets. Map data is extracted from your own copy of the game, on
+  your machine, and is never redistributed.
+
+## Credits
+
+### Third-Party Code
+
+| Component | Author | Use |
+|---|---|---|
+| [ENet-CSharp](https://github.com/nxrighthere/ENet-CSharp) 2.4.8 | Stanislav Denisov and the ENet authors | Network library, vendored in `crates/tabg-enet-sys/vendor` (MIT) |
+| [htmx](https://htmx.org/) | Big Sky Software | Dashboard, in `crates/tabg-web/assets` (BSD Zero) |
+| [tabg-word-list](https://github.com/landfallgames/tabg-word-list) | Landfall Games | Server name filter for the community list (MIT) |
+
+### Downloaded at Runtime (pinned by sha256)
+
+| Component | Author | Use |
+|---|---|---|
+| [BepInEx](https://github.com/BepInEx/BepInEx) 5.4.23.3 | BepInEx Team | Mod loader for the modded client copy and the map export |
+| [HarmonyLib](https://github.com/pardeike/Harmony) | Andreas Pardeike | Runtime patching, bundled with BepInEx |
+| [AntiCheatBootErrorRemover](https://github.com/C0mputery/AntiCheatBootErrorRemover) 1.0 | [C0mputery](https://github.com/C0mputery) | Lets the modded copy start without Easy Anti-Cheat |
+
+### Thanks
+
+- [**CyrusTheLesser**](https://github.com/CyrusTheLesser) for [Citruslib](https://github.com/CyrusTheLesser/Citruslib).
+  The old installer depended on it, and the admin command set people know comes from it.
+- The Rust crates in `Cargo.lock`, especially tokio, axum, maud, clap and ureq.
+
+> **Know someone who should be credited?** Open an issue or DM me on Discord.
+
+## Contact
+
+Have questions, feature requests, or found a bug?
+
+- **Discord:** `anonymer__hase_22156`
+- **GitHub Issues:** [Open an issue](https://github.com/jonassneu/TABG-Server-Installer/issues)
+
+## License
+
+Released under the **MIT License**. See [`LICENSE`](./LICENSE).
+
+Vendored and downloaded third-party components keep their own licenses.
