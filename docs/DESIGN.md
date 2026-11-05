@@ -234,7 +234,7 @@ Rust stack: tokio, axum, maud or askama + htmx, clap, serde + toml, reqwest (rus
   - Solo clients must send `RoomInit` as the host of a 1-player squad; otherwise Landfall's server refuses for lack of a booking, and since the refusal goes to a not-yet-accepted peer it is never delivered (the client just times out). Our server doesn't require bookings.
   - The world state is sent at an estimated size with a zero-filled tail (~3.7 KB extra).
   - A player with no weapon has `weapon_type = i32::MAX`.
-  - After the world state the official server also sends `RecievedSteamID` (1 byte); we don't yet.
+  - After the world state the official server also sends `RecievedSteamID` (1 byte). It carries validated players' Steam/PlayFab/Epic ids so clients can load their cosmetics, and offline it's empty, so we don't send it.
   - The client has a direct-connect UI (`IP[:port]`, default port 7777) besides join codes.
   - The real client zero-pads its `RoomInit` too, and its last flag is `FillUpSquad`.
   - Joining before the client's Epic login completes fails with "Failed generating token" (the client fetches an EOS id token right after the ENet connect).
