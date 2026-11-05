@@ -79,6 +79,9 @@ struct Args {
     /// Bots jump at this fraction of the flight (testing: match TABG_TEST_JUMP to land together).
     #[arg(long)]
     bot_jump: Option<f32>,
+    /// Chance per map car to add one of the unused vehicle types near it (0 = off).
+    #[arg(long, default_value_t = 0.0)]
+    unused_vehicles: f32,
     /// Show the bots on the admin-radar client mod: off, admins or everyone.
     #[arg(long, default_value = "off", value_parser = ["off", "admins", "everyone"])]
     bot_radar: String,
@@ -181,6 +184,7 @@ fn main() {
             "loaded map data"
         );
     }
+    settings.vehicles.unused_chance = args.unused_vehicles.clamp(0.0, 1.0);
     if !args.spawns.is_empty() {
         settings.spawn_points = args
             .spawns

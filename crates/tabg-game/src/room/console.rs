@@ -75,7 +75,8 @@ enum Source {
 }
 
 const HELP: &str = "commands: start, say <text>, players, kick <player>, ban <player>, \
-                    give [player] <item> [qty], heal [player]";
+                    give [player] <item> [qty], heal [player], vehicles, \
+                    vehicle <name> (in game), fpv (in game)";
 
 impl Room {
     /// What happened since the last call.
@@ -156,7 +157,7 @@ impl Room {
     }
 
     /// A chat line shown to `peer` (as said by themselves: TABG has no system chat).
-    fn chat_line(peer: u8, text: &str) -> Outgoing {
+    pub(super) fn chat_line(peer: u8, text: &str) -> Outgoing {
         Outgoing::reliable(
             Recipients::One(peer),
             EventCode::ChatMessage,
@@ -323,6 +324,18 @@ impl Room {
                     format!("healed {name}"),
                 )
             }
+            "vehicles" => (Vec::new(), self.vehicles_list()),
+            "vehicle" => match source {
+                Source::Player(p) => self.vehicle_command(p, &rest.join(" ")),
+                Source::Console => (
+                    Vec::new(),
+                    "vehicle spawns need a player: use it in game".into(),
+                ),
+            },
+            "fpv" => match source {
+                Source::Player(p) => self.give_drone(p),
+                Source::Console => (Vec::new(), "fpv needs a player: use it in game".into()),
+            },
             other => (Vec::new(), format!("unknown command {other:?}; {HELP}")),
         }
     }

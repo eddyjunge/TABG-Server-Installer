@@ -15,6 +15,13 @@ namespace TabgInstaller.FlyingControls
         internal static RoadPosition Point(Vector3 v) => new RoadPosition(v.x,v.y,v.z);
         internal static Vector3 Vector(RoadPosition p) => new Vector3(p.X,p.Y,p.Z);
         private sealed class End { internal int Node; internal UnityEngine.Object Crossing; internal int Road; }
+        /// <summary>The scene's road graph (the server's map export reads it too).</summary>
+        internal static RoadGraph Graph()
+        {
+            int scene=SceneManager.GetActiveScene().handle;
+            if(_graph==null || scene!=_scene) Build(scene);
+            return _graph;
+        }
         internal static List<Vector3> Route(Vector3 start, Vector3 destination)
         {
             int scene=SceneManager.GetActiveScene().handle;

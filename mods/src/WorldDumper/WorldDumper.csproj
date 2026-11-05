@@ -6,5 +6,11 @@
     <GameRef Include="UnityEngine.PhysicsModule" />
     <GameRef Include="UnityEngine.TerrainModule" />
     <GameRef Include="UnityEngine.AIModule" />
+    <GameRef Include="EasyRoads3Dv3" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The hover taxis' road graph, built exactly as the FlyingControls client builds it. -->
+    <Compile Include="$(TabgSharedDir)/Vehicles.Shared/RoadGraph.cs" Link="Shared/RoadGraph.cs" />
+    <Compile Include="../FlyingControls/RoadNetwork.cs" Link="Shared/RoadNetwork.cs" />
   </ItemGroup>
 </Project>

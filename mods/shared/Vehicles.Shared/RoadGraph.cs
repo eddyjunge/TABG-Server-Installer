@@ -13,6 +13,7 @@ namespace TabgInstaller.Vehicles
         internal readonly List<RoadPosition> Points = new List<RoadPosition>();
         private readonly List<List<int>> _edges = new List<List<int>>();
         internal int Add(RoadPosition point) { Points.Add(point); _edges.Add(new List<int>()); return Points.Count-1; }
+        internal IReadOnlyList<int> Neighbours(int node) => _edges[node];
         internal void Connect(int a, int b) { if (a==b) return; if (!_edges[a].Contains(b)) _edges[a].Add(b); if (!_edges[b].Contains(a)) _edges[b].Add(a); }
         internal int Nearest(RoadPosition point)
         {

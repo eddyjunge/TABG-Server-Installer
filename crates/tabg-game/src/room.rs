@@ -49,9 +49,13 @@ mod inventory;
 mod maps;
 mod radar;
 mod skins;
+mod taxi;
+mod vehicle_combat;
+mod vehicles;
 mod voice;
 pub use console::{PlayerInfo, RoomEvent};
 pub use extras::SpellDrops;
+pub use vehicles::VehicleRules;
 
 /// After a match ends, players are disconnected this long later and the room resets (the official
 /// server terminates 15 s after the end).
@@ -216,6 +220,9 @@ pub struct Room {
     skins_authorized: Vec<u8>,
     /// Peers whose radar mod said hello.
     radar_watchers: Vec<u8>,
+    vehicles: vehicles::VehicleState,
+    combat: vehicle_combat::CombatState,
+    taxis: taxi::TaxiState,
     next_radar_at: f32,
     /// Bomb mode round state.
     bomb: Option<bomb::BombState>,
@@ -253,6 +260,9 @@ impl Room {
             match_started_at: 0.0,
             skins_authorized: Vec::new(),
             radar_watchers: Vec::new(),
+            vehicles: Default::default(),
+            combat: Default::default(),
+            taxis: Default::default(),
             next_radar_at: 0.0,
             bomb: None,
             souls: BTreeMap::new(),
@@ -272,16 +282,19 @@ impl Room {
             .iter()
             .map(|s| (s.car_index, Car::spawn(s)))
             .collect();
+        self.spawn_unused_vehicles();
     }
 
     /// Cars standing in `chunks` (none in the lobby, as on the official server).
-    fn cars_in(&self, chunks: &[(i8, i8)]) -> Vec<tabg_protocol::vehicles::ChunkCar> {
+    fn cars_in(&self, chunks: &[(i8, i8)], peer: u8) -> Vec<tabg_protocol::vehicles::ChunkCar> {
         if self.state == game_state::WAITING_FOR_PLAYERS {
             return Vec::new();
         }
         self.cars
             .values()
-            .filter(|c| chunks.contains(&chunk_of(c.position)))
+            .filter(|c| {
+                chunks.contains(&chunk_of(c.position)) && self.car_visible_to(c.index, peer)
+            })
             .map(Car::chunk_entry)
             .collect()
     }
@@ -330,6 +343,7 @@ impl Room {
         self.pending.retain(|&p| p != peer);
         self.skins_authorized.retain(|&p| p != peer);
         self.radar_watchers.retain(|&p| p != peer);
+        self.forget_vehicle_client(peer);
         self.eject(peer);
         // Leaving mid-match drops your loot, like dying (official `PlayerLeaveCommand`).
         let mut dropped = Vec::new();
@@ -369,6 +383,9 @@ impl Room {
         if packet.code == radar::RADAR {
             return self.radar_hello(peer, &packet.payload);
         }
+        if packet.code == vehicles::VEHICLES {
+            return self.vehicle_message(peer, &packet.payload);
+        }
         if matches!(packet.code, maps::RANGE | maps::DEV_TEST) {
             return self.test_map(peer, packet.code, &packet.payload);
         }
@@ -394,10 +411,31 @@ impl Room {
                 }
             }
             // Landing after skydiving: remembered and relayed unchanged, like the official server.
-            Some(EventCode::DamageEvent) => match DamageEvent::decode(&packet.payload) {
-                Ok(ev) => self.damage(peer, ev),
-                Err(_) => Vec::new(),
-            },
+            Some(EventCode::DamageEvent) => {
+                // A FlyingControls blast receipt may trail the packet (missile / FPV hits).
+                let receipt = vehicle_combat::strip_receipt(&packet.payload);
+                let payload = receipt.map_or(&packet.payload[..], |r| r.0);
+                match DamageEvent::decode(payload) {
+                    Ok(ev) => {
+                        let before = self.players.get(&ev.victim).map(|p| (p.health, p.position));
+                        let mut out = self.damage(peer, ev.clone());
+                        if let (Some((_, is_missile, id)), Some((health, at))) = (receipt, before) {
+                            let after = self.players.get(&ev.victim).map_or(0.0, |p| p.health);
+                            out.extend(self.confirm_blast(
+                                ev.attacker,
+                                is_missile,
+                                id,
+                                false,
+                                i32::from(ev.victim),
+                                at,
+                                (health - after).max(0.0),
+                            ));
+                        }
+                        out
+                    }
+                    Err(_) => Vec::new(),
+                }
+            }
             // The client reports its own death (falling, …) or a death by the ring: `[player index]`.
             Some(EventCode::PlayerDead) | Some(EventCode::RingDeath)
                 if packet.payload.first() == Some(&peer) =>
@@ -532,10 +570,41 @@ impl Room {
                 }
                 Vec::new()
             }
-            Some(EventCode::CarDamage) => match CarDamageReport::decode(&packet.payload) {
-                Ok(d) => self.car_damage(peer, d),
-                Err(_) => Vec::new(),
-            },
+            Some(EventCode::CarDamage) => {
+                let receipt = vehicle_combat::strip_receipt(&packet.payload);
+                let payload = receipt.map_or(&packet.payload[..], |r| r.0);
+                match CarDamageReport::decode(payload) {
+                    Ok(d) => {
+                        let health = |room: &Room| {
+                            room.cars
+                                .get(&d.car_index)
+                                .and_then(|c| c.parts.iter().find(|p| p.index == d.part))
+                                .map(|p| p.health)
+                        };
+                        let (before, at) = (
+                            health(self),
+                            self.cars.get(&d.car_index).map(|c| c.position),
+                        );
+                        let mut out = self.car_damage(peer, d.clone());
+                        if let (Some((_, is_missile, id)), Some(before), Some(at)) =
+                            (receipt, before, at)
+                        {
+                            let lost = (before - health(self).unwrap_or(0.0)).max(0.0);
+                            out.extend(self.confirm_blast(
+                                peer,
+                                is_missile,
+                                id,
+                                true,
+                                d.car_index,
+                                at,
+                                lost,
+                            ));
+                        }
+                        out
+                    }
+                    Err(_) => Vec::new(),
+                }
+            }
             Some(EventCode::PassangerUpdate) => {
                 if let Ok(up) = PassengerUpdate::decode(&packet.payload) {
                     if let Some(p) = self
@@ -900,7 +969,7 @@ impl Room {
                 .map(Self::chunk_player)
                 .collect(),
             loot: self.loot.in_chunks(&area),
-            cars: self.cars_in(&area),
+            cars: self.cars_in(&area, peer),
         };
         let mut out = vec![Outgoing::reliable(
             Recipients::One(peer),
@@ -956,7 +1025,7 @@ impl Room {
                 .map(Self::chunk_player)
                 .collect(),
             loot: self.loot.in_chunks(&appeared),
-            cars: self.cars_in(&appeared),
+            cars: self.cars_in(&appeared, peer),
         };
         let exit = ChunkExit {
             player_index: peer,
@@ -1125,8 +1194,11 @@ impl Room {
         {
             return Vec::new();
         }
+        let mut req = req;
+        let drone = req.item_id == crate::vehicles::drone::ITEM
+            && self.drone_thrown(peer, &mut req.quantity, req.position);
         self.inventory_remove(peer, req.item_id, req.quantity);
-        let network_id = if self.settings.grenades.contains(&req.item_id) {
+        let network_id = if drone || self.settings.grenades.contains(&req.item_id) {
             self.loot.reserve_id()
         } else {
             self.loot
@@ -1206,6 +1278,9 @@ impl Room {
         let p = self.players.get_mut(&peer).expect("checked above");
         p.seat = (req.action == SEAT_GET_IN).then_some((req.car_index, network_index, driver));
         p.dirty = true;
+        if req.action == SEAT_GET_IN {
+            self.vehicle_seated(req.car_index, driver);
+        }
         let mut to = self.watchers(car_chunk);
         if !to.contains(&peer) {
             to.push(peer);
@@ -1226,6 +1301,9 @@ impl Room {
         else {
             return Vec::new();
         };
+        if self.taxi_owns_motion(car_index) {
+            return Vec::new();
+        }
         let Some(car) = self.cars.get_mut(&car_index) else {
             return Vec::new();
         };
@@ -1256,6 +1334,9 @@ impl Room {
     /// `CarTemporaryUpdate`: the last driver pushes the empty car for a few seconds.
     fn car_push(&mut self, peer: u8, up: CarTemporaryUpdate) {
         let now = self.last_now.unwrap_or(0.0);
+        if self.taxi_owns_motion(up.car_index) {
+            return;
+        }
         let Some(car) = self.cars.get_mut(&up.car_index) else {
             return;
         };
@@ -1282,6 +1363,18 @@ impl Room {
             || !d.new_health.is_finite()
         {
             return Vec::new();
+        }
+        if self.is_aircraft_car(d.car_index) {
+            let known = self
+                .cars
+                .get(&d.car_index)
+                .is_some_and(|c| c.parts.iter().any(|p| p.index == d.part));
+            if !known {
+                return Vec::new();
+            }
+            return self
+                .aircraft_damage(peer, d.car_index, d.new_health)
+                .unwrap_or_default();
         }
         let Some(car) = self.cars.get_mut(&d.car_index) else {
             return Vec::new();
@@ -2111,6 +2204,12 @@ impl Room {
         let mut out = self.tick_match(now, dt);
         out.extend(self.tick_bots(now, dt));
         out.extend(self.tick_radar(now));
+        if self.state == game_state::STARTED {
+            out.extend(self.tick_aircraft(now, dt));
+            out.extend(self.tick_missiles(now, dt));
+            out.extend(self.tick_drones(now));
+            out.extend(self.tick_taxis(now));
+        }
         out.extend(self.tick_movement(now));
         out
     }
@@ -3160,7 +3259,10 @@ mod tests {
         let out = room.force_chunk_entry(0);
         let raw = &events(&out, EventCode::ChunkEntry)[0].packet.payload;
         assert_eq!(u16::from_le_bytes([raw[4], raw[5]]), 1, "one car in view");
-        assert_eq!(room.cars_in(&[chunk_of(room.cars[&car].position)]).len(), 1);
+        assert_eq!(
+            room.cars_in(&[chunk_of(room.cars[&car].position)], 0).len(),
+            1
+        );
     }
 
     fn chat(room: &mut Room, peer: u8, text: &str) -> Vec<Outgoing> {
@@ -4236,5 +4338,371 @@ mod tests {
         let moved = (after[0] - before[0]).hypot(after[2] - before[2]);
         assert!(moved > 5.0, "the bot walked {moved} m");
         assert_eq!(after[1], 120.0, "on the ground");
+    }
+
+    fn vehicle_types() -> Vec<crate::vehicles::VehicleType> {
+        use crate::vehicles::{Hull, VehicleType};
+        let part = |i: u8, health: f32, name: &str| tabg_protocol::messages::CarPart {
+            index: i,
+            health,
+            name: name.into(),
+        };
+        vec![
+            VehicleType {
+                car_type: 0,
+                name: "Bike".into(),
+                seats: vec![(0, true), (1, false)],
+                parts: vec![part(0, 500.0, "Chassi")],
+                hull: Hull::new(&[[-0.5, -0.5, -1.0, 0.5, 0.5, 1.0]]),
+            },
+            VehicleType {
+                car_type: 4,
+                name: "Heli".into(),
+                seats: vec![(0, true), (1, false)],
+                parts: vec![part(0, 1000.0, "Chassi"), part(1, 50.0, "Wheel")],
+                hull: Hull::new(&[[-1.0, -1.3, -2.4, 1.0, 1.1, 2.4]]),
+            },
+        ]
+    }
+
+    /// Two enemies on a flat island with one map bike; FlyingControls hellos from both.
+    fn vehicle_room() -> Room {
+        let mut settings = RoomSettings {
+            nav: Some(flat_island()),
+            cars: vec![crate::cars::CarSpawn {
+                car_type: 0,
+                car_index: 0,
+                position: [0.0, 121.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                seats: vec![(0, true), (1, false)],
+                parts: vec![],
+            }],
+            ..Default::default()
+        };
+        settings.vehicles.types = vehicle_types();
+        let mut room = fight_room_with(settings, &[(0, 1), (1, 2)]);
+        for p in [0, 1] {
+            let pl = room.players.get_mut(&p).unwrap();
+            pl.landed = true;
+            pl.position = [10.0 * f32::from(p), 121.0, 0.0];
+        }
+        for p in [0, 1] {
+            room.handle(p, &vehicle_packet(0, &[]));
+        }
+        room
+    }
+
+    fn vehicle_packet(kind: u8, body: &[u8]) -> Packet {
+        let mut payload = 0x5647_4854u32.to_le_bytes().to_vec();
+        payload.extend([2, kind]);
+        payload.extend_from_slice(body);
+        Packet { code: 245, payload }
+    }
+
+    fn vehicle_events(out: &[Outgoing], kind: u8) -> Vec<&Outgoing> {
+        out.iter()
+            .filter(|o| o.packet.code == 245 && o.packet.payload.get(5) == Some(&kind))
+            .collect()
+    }
+
+    #[test]
+    fn unused_vehicles_join_the_map() {
+        let mut settings = RoomSettings {
+            nav: Some(flat_island()),
+            cars: (0..20)
+                .map(|i| crate::cars::CarSpawn {
+                    car_type: 0,
+                    car_index: i,
+                    position: [i as f32 * 50.0, 121.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    seats: vec![(0, true)],
+                    parts: vec![],
+                })
+                .collect(),
+            ..Default::default()
+        };
+        settings.vehicles.types = vehicle_types();
+        settings.vehicles.unused_chance = 1.0;
+        settings.vehicles.unused_max = 5;
+        let room = Room::new(settings);
+        let helis: Vec<_> = room.cars.values().filter(|c| c.car_type == 4).collect();
+        assert_eq!(room.cars.len(), 25);
+        assert_eq!(helis.len(), 5, "only unused types are added");
+        assert!(
+            helis
+                .iter()
+                .all(|c| (c.position[1] - (120.0 + 1.3 + 0.5)).abs() < 1e-3)
+        );
+        assert!(helis.iter().all(|c| room.is_aircraft_car(c.index)));
+        assert!(
+            helis
+                .iter()
+                .all(|c| c.seats.len() == 2 && c.parts.len() == 2)
+        );
+    }
+
+    #[test]
+    fn admins_spawn_vehicles_for_flying_controls_clients() {
+        let mut room = vehicle_room();
+        room.settings.admins = vec!["p0".into()];
+        room.apply_settings(room.settings.clone());
+        let out = chat(&mut room, 0, "/vehicle heli");
+        let spawn = vehicle_events(&out, 1);
+        assert_eq!(spawn.len(), 1, "{out:?}");
+        assert_eq!(spawn[0].to, Recipients::Many(vec![0, 1]));
+        let index = i32::from_le_bytes(spawn[0].packet.payload[6..10].try_into().unwrap());
+        assert_eq!(room.cars[&index].car_type, 4);
+        assert!(room.is_aircraft_car(index));
+        // The spawner's client confirms.
+        let out = room.handle(0, &vehicle_packet(2, &index.to_le_bytes()));
+        assert_eq!(events(&out, EventCode::ChatMessage).len(), 1);
+        // Too soon for another one, and a vanilla client can't spawn.
+        let out = chat(&mut room, 0, "/vehicle heli");
+        assert!(vehicle_events(&out, 1).is_empty());
+        room.vehicles.clients.remove(&0);
+        let out = chat(&mut room, 0, "/vehicle bike");
+        assert!(vehicle_events(&out, 1).is_empty());
+        // A /vehicle spawn is never shown to vanilla clients.
+        assert!(!room.car_visible_to(index, 7));
+        assert!(room.car_visible_to(index, 1));
+    }
+
+    #[test]
+    fn aircraft_crash_explode_and_hand_over() {
+        let mut room = vehicle_room();
+        room.cars.insert(
+            5,
+            crate::cars::Car::spawn(&crate::cars::CarSpawn {
+                car_type: 4,
+                car_index: 5,
+                position: [3.0, 140.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                seats: vec![(0, true), (1, false)],
+                parts: vec![],
+            }),
+        );
+        room.track_aircraft(5, "Heli", 0.0);
+        seat(&mut room, 0, 5, 0, SEAT_GET_IN);
+        seat(&mut room, 1, 5, 1, SEAT_GET_IN);
+        // The pilot leaves: the passenger takes over.
+        seat(&mut room, 0, 5, 0, SEAT_GET_OUT);
+        let out = room.tick(3.0);
+        assert_eq!(vehicle_events(&out, 21).len(), 1, "pilot handover");
+        assert_eq!(room.players[&1].seat, Some((5, 0, true)));
+        // Too slow a bump is nothing; a hard crash (after the start protection) destroys it.
+        let crash = |speed: f32| {
+            let mut b = 5i32.to_le_bytes().to_vec();
+            b.extend(speed.to_le_bytes());
+            vehicle_packet(3, &b)
+        };
+        assert!(room.handle(1, &crash(10.0)).is_empty());
+        room.tick(6.0);
+        let out = room.handle(1, &crash(30.0));
+        let boom = vehicle_events(&out, 4);
+        assert_eq!(boom.len(), 1);
+        assert_eq!(
+            *boom[0].packet.payload.last().unwrap(),
+            1,
+            "the occupant is listed"
+        );
+        assert!(!room.cars.contains_key(&5));
+        assert_eq!(room.players[&1].seat, None);
+    }
+
+    #[test]
+    fn unpiloted_helicopters_fall() {
+        let mut room = vehicle_room();
+        room.cars.insert(
+            5,
+            crate::cars::Car::spawn(&crate::cars::CarSpawn {
+                car_type: 4,
+                car_index: 5,
+                position: [3.0, 200.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                seats: vec![(0, true)],
+                parts: vec![],
+            }),
+        );
+        room.track_aircraft(5, "Heli", 0.0);
+        seat(&mut room, 0, 5, 0, SEAT_GET_IN);
+        room.tick(2.0);
+        room.tick(2.1);
+        seat(&mut room, 0, 5, 0, SEAT_GET_OUT);
+        let out = run(&mut room, 3.0, 4.0);
+        assert!(!vehicle_events(&out, 18).is_empty(), "AircraftFall updates");
+        assert!(room.cars[&5].position[1] < 200.0);
+        // 80 m up: it hits the ground fast enough to explode.
+        let out = run(&mut room, 4.1, 12.0);
+        assert_eq!(vehicle_events(&out, 4).len(), 1);
+        assert!(!room.cars.contains_key(&5));
+    }
+
+    #[test]
+    fn helicopter_missiles_fly_and_explode() {
+        let mut room = vehicle_room();
+        room.cars.insert(
+            5,
+            crate::cars::Car::spawn(&crate::cars::CarSpawn {
+                car_type: 4,
+                car_index: 5,
+                position: [-30.0, 121.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                seats: vec![(0, true)],
+                parts: vec![],
+            }),
+        );
+        room.track_aircraft(5, "Heli", 0.0);
+        room.players.get_mut(&0).unwrap().position = [-30.0, 121.0, 0.0];
+        seat(&mut room, 0, 5, 0, SEAT_GET_IN);
+        room.players.get_mut(&1).unwrap().position = [0.0, 121.0, 0.0];
+        // Unguided, straight at the enemy 30 m away.
+        let mut b = (-1i32).to_le_bytes().to_vec();
+        for f in [1.0f32, 0.0, 0.0] {
+            b.extend(f.to_le_bytes());
+        }
+        b.push(0);
+        let out = room.handle(0, &vehicle_packet(6, &b));
+        assert_eq!(vehicle_events(&out, 7).len(), 1, "launched");
+        let reply = vehicle_events(&out, 10);
+        assert_eq!(*reply[0].packet.payload.last().unwrap(), 1, "fired");
+        let mut out = Vec::new();
+        let mut t = 2.0;
+        while t < 4.0 {
+            out.extend(room.tick(t));
+            t += 1.0 / 30.0;
+        }
+        let removed = vehicle_events(&out, 8);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].packet.payload[6 + 16], 2, "exploded");
+        // Cooldown: can't fire again right away.
+        let out = room.handle(0, &vehicle_packet(6, &b));
+        assert!(vehicle_events(&out, 7).is_empty());
+    }
+
+    #[test]
+    fn fpv_drones_launch_fly_and_crash() {
+        let mut room = vehicle_room();
+        room.settings.admins = vec!["p0".into()];
+        room.apply_settings(room.settings.clone());
+        let out = chat(&mut room, 0, "/fpv");
+        assert_eq!(events(&out, EventCode::PlayerLootRecieved).len(), 1);
+        assert_eq!(room.carried(0, 30001), 1);
+        let t = tabg_protocol::actions::ThrowRequest {
+            player_index: 0,
+            item_id: 30001,
+            quantity: 1,
+            position: [0.0, 122.0, 0.0],
+            direction: [0.0, 1.0, 0.0],
+        };
+        room.handle(0, &Packet::new(EventCode::RequestItemThrow, t.encode()));
+        assert_eq!(room.carried(0, 30001), 0);
+        let v3 = |b: &mut Vec<u8>, v: [f32; 3]| {
+            for f in v {
+                b.extend(f.to_le_bytes());
+            }
+        };
+        let mut b = 9i32.to_le_bytes().to_vec();
+        v3(&mut b, [0.0, 125.0, 0.0]);
+        v3(&mut b, [0.0; 3]);
+        let out = room.handle(0, &vehicle_packet(11, &b));
+        let state = vehicle_events(&out, 12);
+        assert_eq!(state.len(), 1, "{out:?}");
+        let id = i32::from_le_bytes(state[0].packet.payload[6..10].try_into().unwrap());
+        room.tick(2.5);
+        // Fly up a bit, then into the ground.
+        let mut b = id.to_le_bytes().to_vec();
+        b.extend(1i32.to_le_bytes());
+        v3(&mut b, [0.0, 130.0, 2.0]);
+        v3(&mut b, [0.0; 3]);
+        assert_eq!(
+            vehicle_events(&room.handle(0, &vehicle_packet(13, &b)), 12).len(),
+            1
+        );
+        let mut b = id.to_le_bytes().to_vec();
+        b.push(1);
+        v3(&mut b, [0.0, 126.0, 4.0]);
+        let out = room.handle(0, &vehicle_packet(14, &b));
+        assert!(out.is_empty(), "nothing there to crash into");
+        room.tick(2.8);
+        let mut b = id.to_le_bytes().to_vec();
+        b.extend(2i32.to_le_bytes());
+        v3(&mut b, [0.0, 121.5, 3.0]);
+        v3(&mut b, [0.0; 3]);
+        assert_eq!(
+            vehicle_events(&room.handle(0, &vehicle_packet(13, &b)), 12).len(),
+            1
+        );
+        let mut b = id.to_le_bytes().to_vec();
+        b.push(1);
+        v3(&mut b, [0.0, 120.2, 3.0]);
+        let out = room.handle(0, &vehicle_packet(14, &b));
+        let finish = vehicle_events(&out, 15);
+        assert_eq!(finish.len(), 1);
+        assert_eq!(*finish[0].packet.payload.last().unwrap(), 1, "exploded");
+        // Launching again without a throw is refused.
+        let mut b = 9i32.to_le_bytes().to_vec();
+        v3(&mut b, [0.0, 125.0, 0.0]);
+        v3(&mut b, [0.0; 3]);
+        assert_eq!(
+            vehicle_events(&room.handle(0, &vehicle_packet(11, &b)), 16).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn hover_taxis_drive_the_roads() {
+        let mut room = vehicle_room();
+        room.settings
+            .vehicles
+            .types
+            .push(crate::vehicles::VehicleType {
+                car_type: 6,
+                name: "Hover_Car".into(),
+                seats: vec![(0, true)],
+                parts: vec![],
+                hull: crate::vehicles::Hull::new(&[[-1.0, -0.8, -1.2, 1.0, 0.7, 1.2]]),
+            });
+        let points: Vec<[f32; 3]> = (0..=20).map(|i| [i as f32 * 10.0, 120.0, 30.0]).collect();
+        let links: Vec<[usize; 2]> = (0..20).map(|i| [i, i + 1]).collect();
+        room.settings.vehicles.roads = Some(std::sync::Arc::new(crate::roads::RoadGraph::new(
+            points, &links,
+        )));
+        room.cars.insert(
+            7,
+            crate::cars::Car::spawn(&crate::cars::CarSpawn {
+                car_type: 6,
+                car_index: 7,
+                position: [0.0, 121.5, 30.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                seats: vec![(0, true)],
+                parts: vec![],
+            }),
+        );
+        room.players.get_mut(&0).unwrap().position = [0.0, 121.0, 30.0];
+        seat(&mut room, 0, 7, 0, SEAT_GET_IN);
+        let mut b = vec![1u8];
+        for f in [150.0f32, 120.0, 30.0] {
+            b.extend(f.to_le_bytes());
+        }
+        room.handle(0, &vehicle_packet(24, &b));
+        // A client update can't move it.
+        let up = CarUpdate {
+            player_index: 0,
+            position: [500.0, 121.0, 30.0],
+            rotation: PackedQuaternion::pack([0.0, 0.0, 0.0, 1.0]),
+            input: PackedDirection::ZERO,
+            driving_state: 0,
+        };
+        room.handle(0, &Packet::new(EventCode::CarUpdate, up.encode()));
+        let out = run(&mut room, 2.0, 6.0);
+        assert!(!vehicle_events(&out, 26).is_empty(), "status to the driver");
+        let at = room.cars[&7].position;
+        assert!(at[0] > 30.0 && at[0] < 160.0, "flew along the road: {at:?}");
+        assert!((at[2] - 30.0).abs() < 3.0, "on the road: {at:?}");
+        assert!(at[1] > 121.0 && at[1] < 125.0, "hovering: {at:?}");
+        assert!(
+            (room.players[&0].position[0] - at[0]).abs() < 0.01,
+            "the driver goes with it"
+        );
     }
 }

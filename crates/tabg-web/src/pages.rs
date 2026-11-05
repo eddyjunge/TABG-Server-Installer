@@ -397,6 +397,7 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                     (field("Voice range (m)", "voice_range", g.voice_range, "For friends with the ProximityChat mod; 0: off."))
                     (check("Allow any outfit (custom-game-skins mod)", "skins", g.skins))
                     (field("Bots", "bots", g.bots, "Fill island matches with bots (they count towards players to start)."))
+                    (field("Unused vehicles", "unused_vehicles", g.unused_vehicles, "Chance per map car to add a helicopter, UFO, hover bike… next to it (0: off). Flying needs the flying-controls mod."))
                     div {
                         label { "Bot radar (admin-radar mod)" }
                         select name="bot_radar" {
@@ -703,6 +704,7 @@ fn settings_from_form(
     c.game.skins = f.contains_key("skins");
     c.game.spell_drops = f.contains_key("spell_drops");
     parse(f, "bots", &mut c.game.bots)?;
+    parse(f, "unused_vehicles", &mut c.game.unused_vehicles)?;
     c.game.bot_radar = match f.get("bot_radar").map(String::as_str) {
         Some("admins") => BotRadar::Admins,
         Some("everyone") => BotRadar::Everyone,

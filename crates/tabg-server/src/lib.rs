@@ -326,6 +326,33 @@ pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Re
             })
             .collect(),
     };
+    settings.vehicles.roads = world
+        .roads
+        .as_ref()
+        .map(|r| std::sync::Arc::new(tabg_game::roads::RoadGraph::new(r.points.clone(), &r.edges)));
+    settings.vehicles.types = world
+        .car_types
+        .iter()
+        .map(|t| tabg_game::vehicles::VehicleType {
+            car_type: t.car_type,
+            name: t.name.clone(),
+            seats: t
+                .seats
+                .iter()
+                .map(|s| (s.network_index, s.driver))
+                .collect(),
+            parts: t
+                .parts
+                .iter()
+                .map(|p| tabg_protocol::messages::CarPart {
+                    index: p.index,
+                    health: p.health,
+                    name: p.name.clone(),
+                })
+                .collect(),
+            hull: tabg_game::vehicles::Hull::new(&t.boxes),
+        })
+        .collect();
     settings.cars = world
         .cars
         .iter()

@@ -119,6 +119,8 @@ pub struct RoomSettings {
     pub bot_jump: Option<f32>,
     /// Who sees the bots (and what they're doing) on the radar client mod.
     pub bot_radar: BotRadar,
+    /// Vehicle types and the unused-vehicles rule (FlyingControls).
+    pub vehicles: crate::room::VehicleRules,
     /// The island's walkability grid (from the dumper), for bots.
     pub nav: Option<std::sync::Arc<crate::nav::NavGrid>>,
     /// Bomb map data and rules (from a Bomb map dump); used when `game_mode` is Bomb.
@@ -186,6 +188,12 @@ impl Default for RoomSettings {
             bots: 0,
             bot_jump: None,
             bot_radar: BotRadar::Off,
+            vehicles: crate::room::VehicleRules {
+                types: Vec::new(),
+                unused_chance: 0.0,
+                unused_max: 15,
+                roads: None,
+            },
             nav: None,
             tick_rate: 30,
             seed: 0x7ab6,

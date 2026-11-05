@@ -190,7 +190,18 @@ namespace Tabg.DevAutoJoin
                 _nextStatus = _sinceJoin + 5f;
                 Player p = Player.localPlayer;
                 string where = p != null ? p.transform.position.ToString() : "no local player";
-                Logger.LogInfo($"t={_sinceJoin:F0}s scene={SceneManager.GetActiveScene().name} player={where} index={ServerConnector.Instance?.GetPlayerIndex()}");
+                var cars = HarmonyLib.AccessTools.Field(typeof(PhotonServerHandler), "m_Cars")?.GetValue(PhotonServerHandler.instance) as System.Collections.ICollection;
+                var visual = FindObjectsOfType<Car>();
+                string nearest = "";
+                if (p != null && visual.Length > 0)
+                {
+                    Car best = null;
+                    foreach (Car c in visual)
+                        if (best == null || (c.transform.position - p.transform.position).sqrMagnitude < (best.transform.position - p.transform.position).sqrMagnitude)
+                            best = c;
+                    nearest = $" nearest={best.name}@{Vector3.Distance(best.transform.position, p.transform.position):F0}m";
+                }
+                Logger.LogInfo($"t={_sinceJoin:F0}s scene={SceneManager.GetActiveScene().name} player={where} index={ServerConnector.Instance?.GetPlayerIndex()} cars={cars?.Count ?? -1} visual={visual.Length}{nearest}");
             }
 
             if (_quitAfter >= 0f && _sinceJoin >= _quitAfter)
@@ -208,6 +219,8 @@ namespace Tabg.DevAutoJoin
         private static void Prefix(ClientPackage clientPackage)
         {
             DevAutoJoinPlugin.Log?.LogInfo($"recv {(byte)clientPackage.Code} {clientPackage.Code} len={clientPackage.Buffer?.Length ?? -1}");
+            if (clientPackage.Code == EventCode.ChatMessage && clientPackage.Buffer != null && clientPackage.Buffer.Length > 2)
+                DevAutoJoinPlugin.Log?.LogInfo("chat: " + System.Text.Encoding.Unicode.GetString(clientPackage.Buffer, 2, Math.Min(clientPackage.Buffer[1], clientPackage.Buffer.Length - 2)));
             if (clientPackage.Code == EventCode.GameStateChanged && clientPackage.Buffer != null && clientPackage.Buffer.Length > 0 && clientPackage.Buffer[0] == (byte)GameState.Flying)
             {
                 DevAutoJoinPlugin.FlyingSince = Time.unscaledTime;

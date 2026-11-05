@@ -1,0 +1,14 @@
+title = "Flying Vehicles"
+description = "Battle Royale with the game's unused vehicles back on the map: helicopters with missiles, UFOs and hover taxis. Admins spawn more with /vehicle and get FPV drones with /fpv. Friends need the flying-controls mod (included in the share code)."
+
+[config.game]
+mode = "battle_royale"
+map = "island"
+unused_vehicles = 0.3
+
+[config.rules]
+respawn = false
+gun_game = []
+
+[config.mods]
+client = ["flying-controls"]

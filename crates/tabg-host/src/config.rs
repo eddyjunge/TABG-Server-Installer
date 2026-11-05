@@ -160,6 +160,11 @@ pub struct Game {
     pub bots: u8,
     /// Show the bots on the admin-radar client mod: off, admins, everyone.
     pub bot_radar: BotRadar,
+    /// Chance per map car to add one of the game's unused vehicles near it (helicopter, UFO,
+    /// hover bike and car, …); 0 = off. Flying them needs the flying-controls mod.
+    pub unused_vehicles: f32,
+    /// At most this many unused vehicles per match.
+    pub unused_vehicles_max: u8,
 }
 
 impl Default for Game {
@@ -188,6 +193,8 @@ impl Default for Game {
             respawn_minigame: false,
             bots: 0,
             bot_radar: BotRadar::Off,
+            unused_vehicles: 0.0,
+            unused_vehicles_max: 15,
         }
     }
 }
@@ -409,6 +416,12 @@ impl ServerToml {
         if !(0.0..=1000.0).contains(&g.voice_range) {
             p.push(problem("game.voice_range", "0 (off) to 1000 metres"));
         }
+        if !(0.0..=1.0).contains(&g.unused_vehicles) {
+            p.push(problem("game.unused_vehicles", "between 0 (off) and 1"));
+        }
+        if g.unused_vehicles_max > 50 {
+            p.push(problem("game.unused_vehicles_max", "at most 50"));
+        }
         if g.bots > 50 || usize::from(g.bots) + usize::from(g.max_players) > 250 {
             p.push(problem(
                 "game.bots",
@@ -526,6 +539,8 @@ impl ServerToml {
         }
         s.respawn_minigame = g.respawn_minigame;
         s.bots = g.bots;
+        s.vehicles.unused_chance = g.unused_vehicles;
+        s.vehicles.unused_max = usize::from(g.unused_vehicles_max);
         s.bot_radar = match g.bot_radar {
             BotRadar::Off => tabg_game::BotRadar::Off,
             BotRadar::Admins => tabg_game::BotRadar::Admins,

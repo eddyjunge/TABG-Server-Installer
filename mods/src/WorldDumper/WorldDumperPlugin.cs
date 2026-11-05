@@ -121,6 +121,8 @@ namespace Tabg.WorldDumper
             AppendLoot(sb);
             sb.Append(",\n");
             AppendCars(sb);
+            AppendCarTypes(sb);
+            AppendRoads(sb);
             AppendBrawl(sb);
             AppendBomb(sb);
             AppendSouls(sb);
@@ -432,6 +434,78 @@ namespace Tabg.WorldDumper
             }
 
             sb.Append("]\n");
+        }
+
+        /// <summary>
+        /// Every vehicle type in the game's database, read from the prefab (nothing is spawned, so
+        /// broken prefabs can't throw): name, seats in network order, damageable parts, and the
+        /// collision boxes in the main rigidbody's frame (for missile and drone hits, aim points and
+        /// ground clearance on the server).
+        /// </summary>
+        private static void AppendCarTypes(StringBuilder sb)
+        {
+            CarDatabase db = CarDatabase.Instance;
+            if (db == null)
+                return;
+            var entries = new System.Collections.Generic.List<string>();
+            for (int type = 0; type < db.ItemCount; type++)
+            {
+                CarDataEntry entry = db.GetDataEntry(type);
+                Car car = entry.prefab != null ? entry.prefab.GetComponent<Car>() : null;
+                if (entry.Index == int.MinValue || car == null)
+                    continue;
+                Seat[] seats = car.GetComponentsInChildren<Seat>();
+                var seatJson = seats.Select((seat, i) => "{\"network_index\": " + i + ", \"driver\": " + (seat.inputHandler != null ? "true" : "false") + "}");
+                Damagable[] parts = car.GetComponentsInChildren<Damagable>();
+                var partJson = parts.Select((d, i) => "{\"index\": " + i + ", \"health\": " + F(d.health) + ", \"name\": " + Quote(d.name) + "}");
+                Transform frame = car.mainRig != null ? car.mainRig.transform : car.transform;
+                var boxes = new System.Collections.Generic.List<string>();
+                foreach (Collider collider in car.GetComponentsInChildren<Collider>(true))
+                {
+                    if (collider.isTrigger || !collider.enabled)
+                        continue;
+                    Bounds local;
+                    if (collider is BoxCollider box) local = new Bounds(box.center, box.size);
+                    else if (collider is SphereCollider sphere) local = new Bounds(sphere.center, Vector3.one * sphere.radius * 2);
+                    else if (collider is CapsuleCollider capsule)
+                    {
+                        var size = Vector3.one * capsule.radius * 2;
+                        size[capsule.direction] = Mathf.Max(capsule.height, size[capsule.direction]);
+                        local = new Bounds(capsule.center, size);
+                    }
+                    else if (collider is MeshCollider mesh && mesh.sharedMesh != null) local = mesh.sharedMesh.bounds;
+                    else continue;
+                    var bounds = new Bounds();
+                    for (int i = 0; i < 8; i++)
+                    {
+                        var corner = local.center + Vector3.Scale(local.extents, new Vector3((i & 1) == 0 ? -1 : 1, (i & 2) == 0 ? -1 : 1, (i & 4) == 0 ? -1 : 1));
+                        var point = frame.InverseTransformPoint(collider.transform.TransformPoint(corner));
+                        if (i == 0) bounds = new Bounds(point, Vector3.zero); else bounds.Encapsulate(point);
+                    }
+                    boxes.Add("[" + F(bounds.min.x) + ", " + F(bounds.min.y) + ", " + F(bounds.min.z) + ", " + F(bounds.max.x) + ", " + F(bounds.max.y) + ", " + F(bounds.max.z) + "]");
+                }
+                entries.Add("    {\"car_type\": " + type + ", \"name\": " + Quote(entry.prefab.name)
+                    + ", \"seats\": [" + string.Join(", ", seatJson) + "], \"parts\": [" + string.Join(", ", partJson) + "]"
+                    + ", \"boxes\": [" + string.Join(", ", boxes) + "]}");
+            }
+            sb.Append(",\n  \"car_types\": [\n").Append(string.Join(",\n", entries)).Append("\n  ]\n");
+        }
+
+        /// <summary>The road graph (points and links) the hover taxis drive on.</summary>
+        private static void AppendRoads(StringBuilder sb)
+        {
+            TabgInstaller.Vehicles.RoadGraph graph;
+            try { graph = TabgInstaller.FlyingControls.RoadNetwork.Graph(); }
+            catch (Exception ex) { Debug.LogWarning("[WorldDumper] road graph: " + ex.Message); return; }
+            if (graph == null || graph.Points.Count == 0)
+                return;
+            var edges = new System.Collections.Generic.List<string>();
+            for (int a = 0; a < graph.Points.Count; a++)
+                foreach (int b in graph.Neighbours(a))
+                    if (a < b) edges.Add("[" + a + ", " + b + "]");
+            sb.Append(",\n  \"roads\": {\"points\": [")
+              .Append(string.Join(", ", graph.Points.Select(p => "[" + F(p.X) + ", " + F(p.Y) + ", " + F(p.Z) + "]")))
+              .Append("], \"edges\": [").Append(string.Join(", ", edges)).Append("]}\n");
         }
 
         private sealed class MethodInfoCache

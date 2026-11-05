@@ -13,9 +13,13 @@ pub mod nav;
 pub mod plane;
 pub mod ring;
 pub mod rng;
+pub mod roads;
 mod room;
 mod settings;
+pub mod vehicles;
 
 pub use ring::RingRules;
-pub use room::{Outgoing, PlayerInfo, RESTART_AFTER_END, Recipients, Room, RoomEvent, SpellDrops};
+pub use room::{
+    Outgoing, PlayerInfo, RESTART_AFTER_END, Recipients, Room, RoomEvent, SpellDrops, VehicleRules,
+};
 pub use settings::{BombRules, BotRadar, ForceStart, Respawn, RoomSettings, SpawnPoint, TestMap};

@@ -161,6 +161,25 @@ pub struct Car {
     pub parts: Vec<CarPart>,
 }
 
+/// Road centre points and the links between them.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Roads {
+    pub points: Vec<[f32; 3]>,
+    pub edges: Vec<[usize; 2]>,
+}
+
+/// A vehicle type from the game's database (prefab data).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CarType {
+    pub car_type: i32,
+    pub name: String,
+    pub seats: Vec<CarSeat>,
+    pub parts: Vec<CarPart>,
+    /// Collision boxes in the vehicle's frame: `[min x, min y, min z, max x, max y, max z]`.
+    #[serde(default)]
+    pub boxes: Vec<[f32; 6]>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct World {
     pub format: u32,
@@ -183,6 +202,12 @@ pub struct World {
     pub items: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub cars: Vec<Car>,
+    /// Every vehicle type; missing in dumps made before vehicles were exported.
+    #[serde(default)]
+    pub car_types: Vec<CarType>,
+    /// The road graph (hover taxis).
+    #[serde(default)]
+    pub roads: Option<Roads>,
     /// Item id (string key) → health restored by using it.
     #[serde(default)]
     pub heal_amounts: std::collections::BTreeMap<String, f32>,

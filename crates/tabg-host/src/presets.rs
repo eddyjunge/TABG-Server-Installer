@@ -63,6 +63,10 @@ const BUILTIN: &[(&str, &str)] = &[
     ),
     ("brawl", include_str!("../../../presets/brawl.toml")),
     ("bomb", include_str!("../../../presets/bomb.toml")),
+    (
+        "flying-vehicles",
+        include_str!("../../../presets/flying-vehicles.toml"),
+    ),
 ];
 
 fn parse(id: &str, text: &str, builtin: bool) -> Result<Preset, String> {
