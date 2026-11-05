@@ -16,6 +16,19 @@ pub enum NetMode {
 }
 
 /// Who sees the bots on the admin-radar client mod.
+/// What the server does when a client drops, throws or uses an item it never got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InventoryCheck {
+    /// Trust clients, like the official server.
+    Off,
+    /// Allow it and write a line to the server log.
+    #[default]
+    Log,
+    /// Refuse it.
+    Enforce,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BotRadar {
@@ -160,6 +173,9 @@ pub struct Game {
     pub bots: u8,
     /// Show the bots on the admin-radar client mod: off, admins, everyone.
     pub bot_radar: BotRadar,
+    /// Check drops, throws and healing against what the server saw a player pick up:
+    /// off, log (report in the server log) or enforce (refuse). Ammo is never checked.
+    pub inventory_check: InventoryCheck,
     /// Chance per map car to add one of the game's unused vehicles near it (helicopter, UFO,
     /// hover bike and car, …); 0 = off. Flying them needs the flying-controls mod.
     pub unused_vehicles: f32,
@@ -193,6 +209,7 @@ impl Default for Game {
             respawn_minigame: false,
             bots: 0,
             bot_radar: BotRadar::Off,
+            inventory_check: InventoryCheck::Log,
             unused_vehicles: 0.0,
             unused_vehicles_max: 15,
         }
@@ -545,6 +562,11 @@ impl ServerToml {
             BotRadar::Off => tabg_game::BotRadar::Off,
             BotRadar::Admins => tabg_game::BotRadar::Admins,
             BotRadar::Everyone => tabg_game::BotRadar::Everyone,
+        };
+        s.inventory_check = match g.inventory_check {
+            InventoryCheck::Off => tabg_game::InventoryCheck::Off,
+            InventoryCheck::Log => tabg_game::InventoryCheck::Log,
+            InventoryCheck::Enforce => tabg_game::InventoryCheck::Enforce,
         };
         if g.map != Map::Island {
             // Mod maps: Test mode at the map's own spawns; the island's loot and cars don't apply.

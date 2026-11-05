@@ -22,4 +22,6 @@ pub use ring::RingRules;
 pub use room::{
     Outgoing, PlayerInfo, RESTART_AFTER_END, Recipients, Room, RoomEvent, SpellDrops, VehicleRules,
 };
-pub use settings::{BombRules, BotRadar, ForceStart, Respawn, RoomSettings, SpawnPoint, TestMap};
+pub use settings::{
+    BombRules, BotRadar, ForceStart, InventoryCheck, Respawn, RoomSettings, SpawnPoint, TestMap,
+};

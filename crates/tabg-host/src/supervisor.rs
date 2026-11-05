@@ -118,6 +118,17 @@ fn describe(event: &RoomEvent) -> String {
         RoomEvent::Won { players, .. } if players.is_empty() => "the match ended".into(),
         RoomEvent::Won { players, .. } => format!("{} won!", players.join(" & ")),
         RoomEvent::Banned { name, id } => format!("{name} was banned ({id})"),
+        RoomEvent::Inventory {
+            name,
+            action,
+            item,
+            wanted,
+            carried,
+            refused,
+        } => format!(
+            "inventory check: {name} wanted to {action} {wanted} × item {item} but carries {carried}{}",
+            if *refused { " (refused)" } else { "" }
+        ),
     }
 }
 

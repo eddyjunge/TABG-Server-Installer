@@ -383,6 +383,12 @@ pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Re
         .filter_map(|(k, &v)| k.parse().ok().map(|k| (k, v)))
         .collect();
     settings.grenades = world.grenades.iter().copied().collect();
+    settings.ammo = world
+        .items
+        .iter()
+        .filter(|(_, name)| name.ends_with(" Ammo"))
+        .filter_map(|(id, _)| id.parse().ok())
+        .collect();
     if let Some(ring) = &world.ring {
         settings.ring.ring_times.clone_from(&ring.ring_times);
         settings.ring.base_time = ring.base_time_to_travel;

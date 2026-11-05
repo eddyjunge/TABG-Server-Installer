@@ -46,6 +46,16 @@ pub enum RoomEvent {
         team: u8,
         players: Vec<String>,
     },
+    /// A client used an item the server didn't see it get (`game.inventory_check`).
+    Inventory {
+        name: String,
+        /// `drop`, `throw` or `heal`.
+        action: String,
+        item: i32,
+        wanted: i32,
+        carried: i32,
+        refused: bool,
+    },
     /// Someone was banned from the console or chat; the host should remember it.
     Banned {
         name: String,

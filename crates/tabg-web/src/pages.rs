@@ -10,7 +10,7 @@ use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use tabg_host::apply::{self, Applied, ApplyError};
-use tabg_host::config::{BotRadar, GameMode, Map, NetMode, Teams};
+use tabg_host::config::{BotRadar, GameMode, InventoryCheck, Map, NetMode, Teams};
 use tabg_host::supervisor::{HostStatus, LogLine, RunState};
 use tabg_host::{ServerToml, backup, presets};
 
@@ -406,6 +406,15 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                             option value="everyone" selected[g.bot_radar == BotRadar::Everyone] { "Everyone" }
                         }
                     }
+                    div {
+                        label { "Inventory check" }
+                        select name="inventory_check" {
+                            option value="off" selected[g.inventory_check == InventoryCheck::Off] { "Off: trust clients" }
+                            option value="log" selected[g.inventory_check == InventoryCheck::Log] { "Log: report in the console" }
+                            option value="enforce" selected[g.inventory_check == InventoryCheck::Enforce] { "Enforce: refuse" }
+                        }
+                        small { "Drops, throws and healing with items a player never picked up. Ammo isn't checked." }
+                    }
                     (check("Spell drops (blessings from the sky)", "spell_drops", g.spell_drops))
                     (check("Respawn minigame (boss fight after an early death)", "respawn_minigame", g.respawn_minigame))
                     }
@@ -709,6 +718,11 @@ fn settings_from_form(
         Some("admins") => BotRadar::Admins,
         Some("everyone") => BotRadar::Everyone,
         _ => BotRadar::Off,
+    };
+    c.game.inventory_check = match f.get("inventory_check").map(String::as_str) {
+        Some("off") => InventoryCheck::Off,
+        Some("enforce") => InventoryCheck::Enforce,
+        _ => InventoryCheck::Log,
     };
     c.game.respawn_minigame = f.contains_key("respawn_minigame");
     c.rules.respawn = f.contains_key("respawn");

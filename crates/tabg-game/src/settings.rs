@@ -36,6 +36,18 @@ pub enum BotRadar {
     Everyone,
 }
 
+/// What happens when a client drops, throws or uses more than the server saw it pick up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InventoryCheck {
+    /// Trust the client, like the official server.
+    Off,
+    /// Allow it, but report it to the host log (once per player and item).
+    #[default]
+    Log,
+    /// Refuse what the player doesn't carry and clamp quantities to what they do.
+    Enforce,
+}
+
 /// Bomb map data and round rules (official `BombGameMode`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct BombRules {
@@ -119,6 +131,10 @@ pub struct RoomSettings {
     pub bot_jump: Option<f32>,
     /// Who sees the bots (and what they're doing) on the radar client mod.
     pub bot_radar: BotRadar,
+    /// Checking drops, throws and healing against the tracked inventory.
+    pub inventory_check: InventoryCheck,
+    /// Ammo item ids. Ammo isn't checked: guns can come loaded, so the server's count drifts.
+    pub ammo: std::collections::BTreeSet<i32>,
     /// Vehicle types and the unused-vehicles rule (FlyingControls).
     pub vehicles: crate::room::VehicleRules,
     /// The island's walkability grid (from the dumper), for bots.
@@ -188,6 +204,8 @@ impl Default for RoomSettings {
             bots: 0,
             bot_jump: None,
             bot_radar: BotRadar::Off,
+            inventory_check: InventoryCheck::Log,
+            ammo: std::collections::BTreeSet::new(),
             vehicles: crate::room::VehicleRules {
                 types: Vec::new(),
                 unused_chance: 0.0,

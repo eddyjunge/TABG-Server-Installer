@@ -85,6 +85,10 @@ struct Args {
     /// Show the bots on the admin-radar client mod: off, admins or everyone.
     #[arg(long, default_value = "off", value_parser = ["off", "admins", "everyone"])]
     bot_radar: String,
+    /// Check drops, throws and healing against what the server saw a player get:
+    /// off, log (report only) or enforce (refuse).
+    #[arg(long, default_value = "log", value_parser = ["off", "log", "enforce"])]
+    inventory_check: String,
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +160,11 @@ fn main() {
             "admins" => tabg_game::BotRadar::Admins,
             "everyone" => tabg_game::BotRadar::Everyone,
             _ => tabg_game::BotRadar::Off,
+        },
+        inventory_check: match args.inventory_check.as_str() {
+            "off" => tabg_game::InventoryCheck::Off,
+            "enforce" => tabg_game::InventoryCheck::Enforce,
+            _ => tabg_game::InventoryCheck::Log,
         },
         spawn_points: vec![SpawnPoint {
             position: FALLBACK_SPAWN,

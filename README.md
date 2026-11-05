@@ -103,6 +103,8 @@ removed.
 - **Backups.** Taken automatically before every config change (the last 50 are kept); one click
   restores one.
 - **Share codes.** One code carries the join code plus the exact client mods, pinned by sha256.
+- **Inventory check.** Drops, throws and healing with items a player never picked up are reported in
+  the console, or refused with `game.inventory_check = "enforce"`.
 
 ### Dashboard
 
@@ -271,6 +273,7 @@ players_to_start = 2
 bots = 0
 voice_range = 50.0
 unused_vehicles = 0.0
+inventory_check = "log"      # "off", "log" (report in the console) or "enforce" (refuse)
 
 [players]
 admins = []

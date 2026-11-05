@@ -41,6 +41,49 @@ impl Room {
         }
     }
 
+    /// `game.inventory_check` for a drop, throw or heal of `wanted` × `item`: the quantity to go
+    /// ahead with, or `None` to refuse. A shortfall is reported once per player and item. Ammo,
+    /// bots, Bomb (bought guns aren't tracked) and a missing player are never checked.
+    pub(super) fn inventory_checked(
+        &mut self,
+        peer: u8,
+        action: &str,
+        item: i32,
+        wanted: i32,
+    ) -> Option<i32> {
+        use crate::settings::InventoryCheck;
+        let mode = self.settings.inventory_check;
+        if mode == InventoryCheck::Off
+            || self.settings.ammo.contains(&item)
+            || self.is_bot(peer)
+            || self.is_bomb()
+        {
+            return Some(wanted);
+        }
+        let carried = self.carried(peer, item);
+        if carried >= wanted {
+            return Some(wanted);
+        }
+        let enforce = mode == InventoryCheck::Enforce;
+        let p = self.players.get_mut(&peer)?;
+        if p.inventory_reported.insert(item) {
+            let name = p.name.clone();
+            self.events.push(super::RoomEvent::Inventory {
+                name,
+                action: action.to_owned(),
+                item,
+                wanted,
+                carried,
+                refused: enforce && carried <= 0,
+            });
+        }
+        match (enforce, carried) {
+            (false, _) => Some(wanted),
+            (true, c) if c > 0 => Some(c),
+            (true, _) => None,
+        }
+    }
+
     /// How many of `item` a player has.
     pub fn carried(&self, peer: u8, item: i32) -> i32 {
         self.players

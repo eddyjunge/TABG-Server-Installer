@@ -139,6 +139,8 @@ struct Player {
     last_outfit: f32,
     /// Item id → quantity carried (see `room/inventory.rs`).
     inventory: BTreeMap<i32, i32>,
+    /// Items already reported by the inventory check (one log line per item).
+    inventory_reported: std::collections::BTreeSet<i32>,
     /// Dead and playing the respawn minigame.
     boss_fight: bool,
     /// Had the respawn minigame this match.
@@ -183,6 +185,7 @@ impl Player {
             voice_window: (f32::MIN, 0),
             last_outfit: f32::MIN,
             inventory: BTreeMap::new(),
+            inventory_reported: std::collections::BTreeSet::new(),
             boss_fight: false,
             boss_done: false,
         }
@@ -1155,7 +1158,17 @@ impl Room {
         let Some(&amount) = self.settings.heal_amounts.get(&item_id) else {
             return Vec::new();
         };
-        let Some(p) = self.players.get_mut(&peer).filter(|p| p.alive && !p.downed) else {
+        if !self
+            .players
+            .get(&peer)
+            .is_some_and(|p| p.alive && !p.downed)
+        {
+            return Vec::new();
+        }
+        if self.inventory_checked(peer, "heal", item_id, 1).is_none() {
+            return Vec::new();
+        }
+        let Some(p) = self.players.get_mut(&peer) else {
             return Vec::new();
         };
         p.health += amount;
@@ -1197,6 +1210,10 @@ impl Room {
             return Vec::new();
         }
         let mut req = req;
+        match self.inventory_checked(peer, "throw", req.item_id, req.quantity) {
+            Some(quantity) => req.quantity = quantity,
+            None => return Vec::new(),
+        }
         let drone = req.item_id == crate::vehicles::drone::ITEM
             && self.drone_thrown(peer, &mut req.quantity, req.position);
         self.inventory_remove(peer, req.item_id, req.quantity);
@@ -1449,6 +1466,11 @@ impl Room {
         {
             return Vec::new();
         }
+        let mut req = req;
+        match self.inventory_checked(peer, "drop", req.item_id, req.quantity) {
+            Some(quantity) => req.quantity = quantity,
+            None => return Vec::new(),
+        }
         self.bomb_dropped(peer, req.item_id);
         self.inventory_remove(peer, req.item_id, req.quantity);
         let item = self.loot.add(req.item_id, req.quantity, req.position);
@@ -1546,6 +1568,8 @@ impl Room {
             return Vec::new();
         }
         if header.ammo_type > -1 && header.shots > -1 {
+            // Whatever a gun fires is ammo, even without the world's item names.
+            self.settings.ammo.insert(header.ammo_type);
             self.inventory_remove(peer, header.ammo_type, header.shots);
         }
         let mut out = Vec::new();
@@ -3308,6 +3332,82 @@ mod tests {
         higher.extend(90.0f32.to_le_bytes());
         assert_eq!(
             room.handle(0, &Packet::new(EventCode::RequestHealthState, higher))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn inventory_check_logs_or_refuses_what_a_player_never_got() {
+        use crate::settings::InventoryCheck;
+        let drop = |item_id, quantity| {
+            let d = DropRequest {
+                player_index: 0,
+                item_id,
+                quantity,
+                position: [0.0; 3],
+            };
+            Packet::new(EventCode::RequestItemDrop, d.encode())
+        };
+        let reported = |room: &mut Room| {
+            room.take_events()
+                .into_iter()
+                .filter_map(|e| match e {
+                    RoomEvent::Inventory {
+                        item,
+                        wanted,
+                        carried,
+                        refused,
+                        ..
+                    } => Some((item, wanted, carried, refused)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Log (the default): allowed, reported once per item.
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        assert_eq!(room.settings.inventory_check, InventoryCheck::Log);
+        room.take_events();
+        assert_eq!(room.handle(0, &drop(132, 3)).len(), 1);
+        assert_eq!(room.handle(0, &drop(132, 3)).len(), 1);
+        assert_eq!(reported(&mut room), vec![(132, 3, 0, false)]);
+
+        // Enforce: refused without the item, clamped to what is carried.
+        let mut room = fight_room(&[(0, 1), (1, 2)]);
+        room.settings.inventory_check = InventoryCheck::Enforce;
+        room.take_events();
+        assert!(room.handle(0, &drop(132, 3)).is_empty());
+        assert_eq!(reported(&mut room), vec![(132, 3, 0, true)]);
+        room.inventory_add(0, 131, 2);
+        let out = room.handle(0, &drop(131, 5));
+        assert_eq!(events(&out, EventCode::ItemDrop).len(), 1);
+        let all = room.loot().in_chunks(&[(0, 0), (-1, -1), (-1, 0), (0, -1)]);
+        assert_eq!(
+            all.iter()
+                .filter(|l| l.item_id == 131)
+                .map(|l| l.quantity)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(room.carried(0, 131), 0);
+        // Ammo is never checked: guns come loaded, so its count drifts.
+        room.settings.ammo.insert(6);
+        assert_eq!(room.handle(0, &drop(6, 30)).len(), 1);
+        // Healing needs the item too.
+        room.settings.heal_amounts.insert(133, 15.0);
+        hit(&mut room, 1, 0, 50.0);
+        let heal = tabg_protocol::actions::HealRequest {
+            player_index: 0,
+            item_id: 133,
+        };
+        assert!(
+            room.handle(0, &Packet::new(EventCode::RequestHealing, heal.encode()))
+                .is_empty()
+        );
+        room.inventory_add(0, 133, 1);
+        assert_eq!(
+            room.handle(0, &Packet::new(EventCode::RequestHealing, heal.encode()))
                 .len(),
             1
         );
