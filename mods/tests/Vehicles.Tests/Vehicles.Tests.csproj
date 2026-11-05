@@ -1,8 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Pure vehicle/bot rule checks. Needs no game files, so it also runs in CI. -->
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-  </PropertyGroup>
+  <!-- Unit tests for the pure vehicle/bot rules (Vehicles.Shared). Needs no game files. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
   <ItemGroup>
     <Compile Include="$(TabgSharedDir)/Vehicles.Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
   </ItemGroup>

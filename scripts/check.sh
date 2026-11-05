@@ -18,7 +18,7 @@ step "cargo test"
 cargo test --workspace
 
 step "vehicle rules"
-dotnet run --project mods/tests/Vehicles.Tests -c Release
+dotnet test mods/tests/Vehicles.Tests -c Release
 
 if [[ "${1:-}" == "--mods" ]]; then
   step "client mods build"

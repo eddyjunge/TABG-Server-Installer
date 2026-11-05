@@ -169,7 +169,7 @@ Overview (status, join code, players, quick actions) · Console · Players (kick
   - Output DLLs are named `Tabg.<Mod>.dll`.
   - No DLLs in git (`.gitignore` blocks them).
   - Deterministic builds with `PathMap`, and no post-build copies into tracked folders.
-  - `mods/tests/Vehicles.Tests` is still the old console runner; converting it to xUnit is open work.
+  - `mods/tests/Vehicles.Tests` is now xUnit, one fact per rule area (20). It needs no game files.
 - **Release:** `scripts/release-mods` builds Release, packs each mod, writes `catalog.json` (id, version, sha256, size, dependencies) and uploads to a GitHub Release. tabg pins catalog versions.
 
 ## 8. Repo layout
