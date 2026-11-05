@@ -358,6 +358,14 @@ pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Re
         settings.ring.base_time = ring.base_time_to_travel;
         settings.ring.hot_spots.clone_from(&ring.hot_spots);
     }
+    if let Some(souls) = &world.souls {
+        settings.soul_item = Some(souls.soul_item);
+        settings.curses = souls
+            .curses
+            .iter()
+            .filter_map(|&c| u8::try_from(c).ok())
+            .collect();
+    }
     if let Some(b) = &world.brawl {
         settings.brawl = brawl_rules(b);
         settings.game_mode = tabg_protocol::messages::game_mode::BRAWL;

@@ -116,6 +116,7 @@ namespace Tabg.WorldDumper
             AppendCars(sb);
             AppendBrawl(sb);
             AppendBomb(sb);
+            AppendSouls(sb);
             sb.Append("}\n");
             return sb.ToString();
         }
@@ -272,6 +273,23 @@ namespace Tabg.WorldDumper
               .Append("], \"bomb_item\": ").Append((bomb != null ? bomb.m_itemIndex : -1).ToString(CultureInfo.InvariantCulture))
               .Append(", \"start_weapon\": ").Append((start != null ? start.m_itemIndex : -1).ToString(CultureInfo.InvariantCulture))
               .Append("}");
+        }
+
+        /// <summary>
+        /// Souls (dropped by the dead, spent to respawn a teammate or cleanse a curse): the soul's
+        /// item id and the curse indices a respawned player can get.
+        /// </summary>
+        private static void AppendSouls(StringBuilder sb)
+        {
+            Type serverClient = HarmonyLib.AccessTools.TypeByName("Landfall.Network.ServerClient");
+            UnityEngine.Object sc = serverClient != null ? FindObjectOfType(serverClient) : null;
+            object soul = Prop(Prop(sc, "GameRoomReference"), "SoulIndex");
+            if (!(soul is int soulItem))
+                return;
+            var curses = Field(CurseDatabase.Instance, "m_Curses") as System.Collections.IDictionary;
+            var keys = curses == null ? new string[0] : curses.Keys.Cast<object>().Select(k => Convert.ToInt32(k).ToString(CultureInfo.InvariantCulture)).ToArray();
+            sb.Append(",\n  \"souls\": {\"soul_item\": ").Append(soulItem.ToString(CultureInfo.InvariantCulture))
+              .Append(", \"curses\": [").Append(string.Join(", ", keys)).Append("]}");
         }
 
         private const float CarsWaitSeconds = 120f;

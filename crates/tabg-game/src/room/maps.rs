@@ -4,8 +4,7 @@
 //! Replaces the old RangeMap.Server / DevTestMap.Server BepInEx plugins.
 
 use tabg_protocol::Packet;
-use tabg_protocol::actions::encode_player_loot;
-use tabg_protocol::{EventCode, Writer};
+use tabg_protocol::Writer;
 
 use super::{Outgoing, Recipients, Room};
 use crate::settings::TestMap;
@@ -82,14 +81,7 @@ impl Room {
                 if item < 0 {
                     return Vec::new();
                 }
-                let mut out = vec![Outgoing {
-                    to: Recipients::One(peer),
-                    packet: Packet::new(
-                        EventCode::PlayerLootRecieved,
-                        encode_player_loot(&[(item, i32::from(quantity))]),
-                    ),
-                    reliable: true,
-                }];
+                let mut out = vec![self.grant(peer, &[(item, i32::from(quantity))])];
                 if map == TestMap::Range {
                     let mut w = header(p, ITEM_GRANTED);
                     w.i32(item).u8(quantity);

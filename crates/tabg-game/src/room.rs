@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use tabg_protocol::actions::{
     ADMIN_START_GAME, ChatMessage, HealRequest, HealthStateRequest, ProjectileSyncHeader,
     ThrowRequest, decode_admin_command, encode_item_thrown, encode_player_health,
-    encode_player_loot, encode_throw_chat,
+    encode_throw_chat,
 };
 use tabg_protocol::combat::{
     DamageEvent, PlayerDamaged, PlayerDead, PlayerFireHeader, ReviveRequest, ReviveStage, TeamDead,
@@ -43,6 +43,7 @@ use crate::settings::{RoomSettings, SpawnPoint};
 
 mod bomb;
 mod console;
+mod inventory;
 mod maps;
 mod skins;
 mod voice;
@@ -128,6 +129,8 @@ struct Player {
     voice_window: (f32, u16),
     /// When the CustomGameSkins outfit last changed.
     last_outfit: f32,
+    /// Item id → quantity carried (see `room/inventory.rs`).
+    inventory: BTreeMap<i32, i32>,
 }
 
 /// One TABG match.
@@ -161,6 +164,8 @@ pub struct Room {
     skins_authorized: Vec<u8>,
     /// Bomb mode round state.
     bomb: Option<bomb::BombState>,
+    /// Soul loot network id → whose soul it is.
+    souls: BTreeMap<i32, u8>,
 }
 
 impl Room {
@@ -188,6 +193,7 @@ impl Room {
             match_started_at: 0.0,
             skins_authorized: Vec::new(),
             bomb: None,
+            souls: BTreeMap::new(),
         };
         room.spawn_cars();
         room
@@ -259,6 +265,17 @@ impl Room {
         self.pending.retain(|&p| p != peer);
         self.skins_authorized.retain(|&p| p != peer);
         self.eject(peer);
+        // Leaving mid-match drops your loot, like dying (official `PlayerLeaveCommand`).
+        let mut dropped = Vec::new();
+        if self.state == game_state::STARTED
+            && self
+                .players
+                .get(&peer)
+                .is_some_and(|p| p.alive && p.dropped)
+            && !self.is_bomb()
+        {
+            dropped = self.drop_inventory(peer);
+        }
         let Some(p) = self.players.remove(&peer) else {
             return Vec::new();
         };
@@ -267,11 +284,12 @@ impl Room {
             name: p.name,
         });
         // PlayerLeft: [player index, 1 if they left the game for good].
-        vec![Outgoing::reliable(
+        dropped.push(Outgoing::reliable(
             Recipients::All,
             EventCode::PlayerLeft,
             vec![peer, 1],
-        )]
+        ));
+        dropped
     }
 
     /// Handle one packet from `peer`. Unknown or malformed packets are ignored.
@@ -292,6 +310,9 @@ impl Room {
             },
             Some(EventCode::RequestWorldState) => self.world_state(peer),
             Some(EventCode::RequestPurchaseGun) => self.bomb_purchase(peer, &packet.payload),
+            Some(EventCode::RequestBlessing) => self.blessing(peer, &packet.payload),
+            Some(EventCode::RequestCurseCleanse) => self.cleanse_curse(peer, &packet.payload),
+            Some(EventCode::RequestRespawnTeamMate) => self.respawn_teammate(peer, &packet.payload),
             Some(EventCode::RequestPlantBomb) => self.bomb_plant(peer, &packet.payload),
             Some(EventCode::RequestDefuseBomb) => self.bomb_defuse(peer),
             Some(EventCode::RequestStopDefuse) => self.bomb_stop_defuse(peer),
@@ -600,6 +621,7 @@ impl Room {
                 level: 0,
                 voice_window: (f32::MIN, 0),
                 last_outfit: f32::MIN,
+                inventory: BTreeMap::new(),
             },
         );
 
@@ -1027,6 +1049,7 @@ impl Room {
         };
         p.health += amount;
         let health = p.health;
+        self.inventory_remove(peer, item_id, 1);
         vec![Outgoing::reliable(
             Recipients::Many(self.near(peer)),
             EventCode::PlayerHealed,
@@ -1062,6 +1085,7 @@ impl Room {
         {
             return Vec::new();
         }
+        self.inventory_remove(peer, req.item_id, req.quantity);
         let network_id = if self.settings.grenades.contains(&req.item_id) {
             self.loot.reserve_id()
         } else {
@@ -1268,6 +1292,7 @@ impl Room {
         let Some(item) = self.loot.take(req.network_id) else {
             return Vec::new();
         };
+        self.inventory_add(peer, item.item_id, item.quantity);
         let mut to = self.watchers(chunk_of(item.position));
         if !to.contains(&peer) {
             to.push(peer);
@@ -1290,6 +1315,7 @@ impl Room {
             return Vec::new();
         }
         self.bomb_dropped(peer, req.item_id);
+        self.inventory_remove(peer, req.item_id, req.quantity);
         let item = self.loot.add(req.item_id, req.quantity, req.position);
         let mut to = self.watchers(chunk_of(item.position));
         if !to.contains(&peer) {
@@ -1377,12 +1403,15 @@ impl Room {
     }
 
     /// `PlayerFire`: relayed to everyone else; a sync reply goes back to the shooter if asked.
-    fn player_fire(&self, peer: u8, packet: &Packet) -> Vec<Outgoing> {
+    fn player_fire(&mut self, peer: u8, packet: &Packet) -> Vec<Outgoing> {
         let Ok(header) = PlayerFireHeader::decode(&packet.payload) else {
             return Vec::new();
         };
         if header.player_index != peer || !self.players.get(&peer).is_some_and(|p| p.alive) {
             return Vec::new();
+        }
+        if header.ammo_type > -1 && header.shots > -1 {
+            self.inventory_remove(peer, header.ammo_type, header.shots);
         }
         let mut out = Vec::new();
         if header.mode & firing_mode::WANTS_TO_BE_SYNCED != 0 {
@@ -1536,8 +1565,16 @@ impl Room {
         };
         let mut out = vec![Self::broadcast(EventCode::PlayerDead, dead.encode())];
         if self.is_bomb() {
+            if let Some(p) = self.players.get_mut(&victim) {
+                p.inventory.clear();
+            }
             out.extend(self.bomb_kill(victim, last_attacker));
             return out;
+        }
+        // Official BattleRoyale/Brawl/Test: the dead drop everything (and a soul). Not in gun
+        // game, where it would hand out other levels' weapons.
+        if self.settings.drop_loot_on_death && self.settings.gun_game.is_empty() {
+            out.extend(self.drop_inventory(victim));
         }
         if self.is_brawl() {
             // A wiped team comes back at its house (official `BrawlGameMode.TeamDead`).
@@ -1563,12 +1600,8 @@ impl Room {
                 {
                     k.level += 1;
                     let level = k.level;
-                    if let Some(items) = self.settings.gun_game.get(level) {
-                        out.push(Outgoing::reliable(
-                            Recipients::One(last_attacker),
-                            EventCode::PlayerLootRecieved,
-                            encode_player_loot(items),
-                        ));
+                    if let Some(items) = self.settings.gun_game.get(level).cloned() {
+                        out.push(self.grant(last_attacker, &items));
                     }
                 }
             }
@@ -1638,9 +1671,8 @@ impl Room {
         })
     }
 
-    /// Groups that still have a living player.
     /// The landing/respawn items: the loadout plus the player's gun game level.
-    fn give_loadout(&self, peer: u8) -> Vec<Outgoing> {
+    fn give_loadout(&mut self, peer: u8) -> Vec<Outgoing> {
         let mut items = self.settings.loadout.clone();
         if let Some(level) = self.players.get(&peer).and_then(|p| {
             self.settings
@@ -1652,11 +1684,7 @@ impl Room {
         if items.is_empty() {
             return Vec::new();
         }
-        vec![Outgoing::reliable(
-            Recipients::One(peer),
-            EventCode::PlayerLootRecieved,
-            encode_player_loot(&items),
-        )]
+        vec![self.grant(peer, &items)]
     }
 
     /// Somewhere on the ground inside the ring: a random loot spot (they sit on floors and
@@ -1717,6 +1745,7 @@ impl Room {
             p.attachments.clear();
             p.weapon_type = NO_WEAPON;
             p.seat = None;
+            p.inventory.clear();
             // [count][index][new index][health][x][y][z][rotation][curse 255 = none]
             let mut w = tabg_protocol::codec::Writer::new();
             w.u8(1).u8(peer).u8(peer).f32(100.0);
@@ -1785,6 +1814,7 @@ impl Room {
         None
     }
 
+    /// Groups that still have a living player.
     fn alive_teams(&self) -> Vec<u8> {
         let mut teams: Vec<u8> = self
             .players
@@ -1922,7 +1952,9 @@ impl Room {
             p.area.clear();
             p.respawn_at = None;
             p.level = 0;
+            p.inventory.clear();
         }
+        self.souls.clear();
         self.match_started_at = now;
         let (modifier, loot) =
             LootWorld::spawn(&self.settings.loot, self.settings.loot_keep, &mut self.rng);
@@ -2165,6 +2197,7 @@ fn clean_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tabg_protocol::actions::encode_player_loot;
     use tabg_protocol::combat::{DamageEvent, PlayerDamaged, PlayerDead, TeamDead};
     use tabg_protocol::loot::{ChunkEntry, ChunkExit, DropRequest, PickupRequest};
     use tabg_protocol::match_flow::{GameStateChanged, PlayerAirplaneDropped, RingUpdate};
@@ -3808,5 +3841,95 @@ mod tests {
             2,
             "placements for both teams"
         );
+    }
+
+    #[test]
+    fn the_dead_drop_their_loot_and_a_soul_that_revives_a_teammate() {
+        let mut room = fight_room_with(
+            RoomSettings {
+                soul_item: Some(10),
+                curses: vec![3, 4],
+                ..Default::default()
+            },
+            &[(0, 1), (1, 1), (2, 2)],
+        );
+        // Player 1 picks up a gun and ammo, fires 30 rounds and heals with a bandage.
+        room.settings.heal_amounts.insert(131, 15.0);
+        let gun = room.loot.add(160, 1, [0.0; 3]);
+        let ammo = room.loot.add(6, 90, [0.0; 3]);
+        let bandage = room.loot.add(131, 2, [0.0; 3]);
+        for item in [&gun, &ammo, &bandage] {
+            let req = PickupRequest {
+                player_index: 1,
+                network_id: item.network_id,
+                slot: 0,
+            };
+            room.handle(
+                1,
+                &Packet::new(EventCode::RequestWeaponPickUp, req.encode()),
+            );
+        }
+        let mut fire = tabg_protocol::Writer::new();
+        fire.u8(1).u8(firing_mode::BURST).i32(6).i32(30);
+        room.handle(1, &Packet::new(EventCode::PlayerFire, fire.into_inner()));
+        hit(&mut room, 2, 1, 50.0);
+        let heal = tabg_protocol::actions::HealRequest {
+            player_index: 1,
+            item_id: 131,
+        };
+        room.handle(1, &Packet::new(EventCode::RequestHealing, heal.encode()));
+        assert_eq!(
+            (
+                room.carried(1, 160),
+                room.carried(1, 6),
+                room.carried(1, 131)
+            ),
+            (1, 60, 1)
+        );
+        // Down and out: everything falls, plus a soul.
+        hit(&mut room, 2, 1, 0.0);
+        run(&mut room, 2.0, 4.0);
+        hit(&mut room, 2, 1, 0.0);
+        if room.players()[1].alive {
+            // Squad mates go down first; finish the downed player.
+            room.kill(1, false);
+        }
+        assert_eq!(room.carried(1, 6), 0, "inventory emptied");
+        let here = tabg_protocol::loot::area_around(chunk_of(room.players[&1].position));
+        let on_ground = room.loot.in_chunks(&here);
+        let soul = on_ground
+            .iter()
+            .find(|i| i.item_id == 10)
+            .expect("a soul on the ground")
+            .clone();
+        assert!(
+            on_ground.iter().any(|i| i.item_id == 6 && i.quantity == 60),
+            "the ammo left"
+        );
+        // Teammate 0 picks the soul up and brings 1 back with a curse.
+        let req = PickupRequest {
+            player_index: 0,
+            network_id: soul.network_id,
+            slot: 0,
+        };
+        room.handle(
+            0,
+            &Packet::new(EventCode::RequestWeaponPickUp, req.encode()),
+        );
+        assert_eq!(room.carried(0, 10), 1);
+        let mut w = tabg_protocol::Writer::new();
+        w.i32(soul.network_id).u8(1);
+        let out = room.handle(
+            0,
+            &Packet::new(EventCode::RequestRespawnTeamMate, w.into_inner()),
+        );
+        let respawn = events(&out, EventCode::PlayerRespawn);
+        assert_eq!(respawn.len(), 1);
+        assert!(
+            [3u8, 4].contains(respawn[0].packet.payload.last().unwrap()),
+            "a random curse"
+        );
+        assert!(room.players()[1].alive);
+        assert_eq!(room.carried(0, 10), 0, "the soul is spent");
     }
 }

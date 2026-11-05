@@ -95,6 +95,14 @@ pub struct BrawlHouse {
     pub spawns: Vec<SpawnPoint>,
 }
 
+/// Souls: the soul item and the curses a respawned teammate can get.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct SoulsData {
+    pub soul_item: i32,
+    #[serde(default)]
+    pub curses: Vec<i32>,
+}
+
 /// Bomb map data (from a dump of the dedicated server in Bomb mode).
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct BombData {
@@ -181,6 +189,9 @@ pub struct World {
     /// Only in dumps made in Bomb mode.
     #[serde(default)]
     pub bomb: Option<BombData>,
+    /// Missing in dumps made before souls were exported.
+    #[serde(default)]
+    pub souls: Option<SoulsData>,
 }
 
 impl World {

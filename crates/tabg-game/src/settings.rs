@@ -94,6 +94,12 @@ pub struct RoomSettings {
     pub respawn: Option<Respawn>,
     /// With respawns: the match ends after this many seconds (0 = no limit); most kills wins.
     pub time_limit: f32,
+    /// The soul item id (from the map data); `None` turns souls off.
+    pub soul_item: Option<i32>,
+    /// Curses a teammate brought back with a soul can get.
+    pub curses: Vec<u8>,
+    /// The dead drop what they carry (official behaviour).
+    pub drop_loot_on_death: bool,
     /// Bomb map data and rules (from a Bomb map dump); used when `game_mode` is Bomb.
     pub bomb: Option<BombRules>,
     /// Brawl houses and loot (from a Brawl map dump); used when `game_mode` is Brawl.
@@ -151,6 +157,9 @@ impl Default for RoomSettings {
             skins: false,
             brawl: crate::brawl::BrawlRules::default(),
             bomb: None,
+            soul_item: None,
+            curses: Vec::new(),
+            drop_loot_on_death: true,
             tick_rate: 30,
             seed: 0x7ab6,
         }
