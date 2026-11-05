@@ -242,6 +242,10 @@ impl Room {
                     let p = &self.players[&target];
                     (p.name.clone(), p.id.clone())
                 };
+                if self.is_bot(target) {
+                    self.forget_bot(target);
+                    return (self.disconnect(target), format!("removed {name}"));
+                }
                 self.to_disconnect.push(target);
                 if verb == "ban" {
                     if !self.settings.banned.contains(&id) {

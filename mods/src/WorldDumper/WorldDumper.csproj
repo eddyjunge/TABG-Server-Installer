@@ -3,5 +3,8 @@
   <ItemGroup>
     <!-- TABG's loot databases derive from Odin's SerializedScriptableObject. -->
     <GameRef Include="Sirenix.Serialization" />
+    <GameRef Include="UnityEngine.PhysicsModule" />
+    <GameRef Include="UnityEngine.TerrainModule" />
+    <GameRef Include="UnityEngine.AIModule" />
   </ItemGroup>
 </Project>

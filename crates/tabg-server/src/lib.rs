@@ -274,6 +274,9 @@ fn send_all(host: &mut impl Transport, room: &Room, out: Vec<Outgoing>) {
                 .collect(),
         };
         for peer in targets {
+            if room.is_bot(peer) {
+                continue;
+            }
             if let Err(e) = host.send(u32::from(peer), &wire, o.reliable) {
                 warn!(peer, error = %e, "send failed");
             }
@@ -450,5 +453,24 @@ fn brawl_rules(b: &tabg_world::BrawlData) -> tabg_game::brawl::BrawlRules {
                 redo_chance: p.redo_chance,
             })
             .collect(),
+    }
+}
+
+/// The walkability grid the dumper writes next to a world file (`world.nav` for `world.json`),
+/// if it exists. Bots need it.
+pub fn load_nav(world_path: &std::path::Path) -> Option<std::sync::Arc<tabg_game::nav::NavGrid>> {
+    use std::io::Read;
+    let path = world_path.with_extension("nav");
+    let file = std::fs::File::open(&path).ok()?;
+    let mut bytes = Vec::new();
+    flate2::read::GzDecoder::new(file)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    match tabg_game::nav::NavGrid::decode(&bytes) {
+        Ok(grid) => Some(std::sync::Arc::new(grid)),
+        Err(e) => {
+            warn!("{}: {e}", path.display());
+            None
+        }
     }
 }

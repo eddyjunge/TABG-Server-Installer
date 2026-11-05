@@ -73,6 +73,12 @@ struct Args {
     /// Early Battle Royale deaths go to the boss fight (the respawn minigame).
     #[arg(long)]
     respawn_minigame: bool,
+    /// Fill the match with this many bots (needs the walkability grid next to --world).
+    #[arg(long, default_value_t = 0)]
+    bots: u8,
+    /// Bots jump at this fraction of the flight (testing: match TABG_TEST_JUMP to land together).
+    #[arg(long)]
+    bot_jump: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +144,8 @@ fn main() {
         respawn: args.respawn.map(|delay| tabg_game::Respawn { delay }),
         kills_to_win: args.kills_to_win,
         respawn_minigame: args.respawn_minigame,
+        bots: args.bots,
+        bot_jump: args.bot_jump,
         spawn_points: vec![SpawnPoint {
             position: FALLBACK_SPAWN,
             rotation: 0.0,
@@ -150,6 +158,13 @@ fn main() {
         app_version.clone_from(&world.app_version);
         if let Err(e) = tabg_server::apply_world(&mut settings, &world) {
             fail(format!("{}: {e}", path.display()));
+        }
+        settings.nav = tabg_server::load_nav(path);
+        if settings.nav.is_none() && args.bots > 0 {
+            tracing::warn!(
+                "no walkability grid next to {}; bots are off",
+                path.display()
+            );
         }
         tracing::info!(
             spawns = settings.spawn_points.len(),

@@ -18,6 +18,7 @@ namespace Tabg.WorldDumper
     /// Environment:
     ///   TABG_WORLD_OUT   output file (default: tabg-world.json next to the game executable)
     ///   TABG_WORLD_QUIT  "1" to quit the game after writing
+    ///   TABG_NAV_OUT     where to write the bots' walkability grid (default: next to the JSON)
     ///
     /// The server this runs in never appears in the community server list: its heartbeat is
     /// switched off.
@@ -73,6 +74,12 @@ namespace Tabg.WorldDumper
             {
                 File.WriteAllText(path, BuildJson(spawns), new UTF8Encoding(false));
                 Logger.LogInfo($"Wrote {spawns.Length} spawn points to {path}");
+                string nav = Environment.GetEnvironmentVariable("TABG_NAV_OUT");
+                if (string.IsNullOrEmpty(nav))
+                {
+                    nav = Path.ChangeExtension(path, ".nav");
+                }
+                WriteNavGrid(nav);
             }
             catch (Exception e)
             {
@@ -314,6 +321,65 @@ namespace Tabg.WorldDumper
             if (min is float mn && max is float mx)
                 sb.Append(", \"spell_drop_interval\": [").Append(F(mn)).Append(", ").Append(F(mx)).Append("]");
             sb.Append("}");
+        }
+
+        /// <summary>
+        /// The bots' map: the top surface height on a 1 m grid over the land (one ray down per
+        /// cell), as little-endian u16 of (height - 100) * 64, 0 for water. Gzip-compressed, with a
+        /// header: "TBNG", u32 version 1, f32 min x, f32 min z, f32 cell size, u32 width, u32 depth.
+        /// </summary>
+        private void WriteNavGrid(string path)
+        {
+            const float Cell = 1f, WaterLine = 109.5f, Margin = 40f;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            // A coarse pass finds where the land is.
+            float minX = float.MaxValue, minZ = float.MaxValue, maxX = float.MinValue, maxZ = float.MinValue;
+            for (float cx = -2500f; cx < 2500f; cx += 8f)
+                for (float cz = -2500f; cz < 2500f; cz += 8f)
+                    if (Physics.Raycast(new Vector3(cx, 2000f, cz), Vector3.down, out RaycastHit h, 4000f, ~0, QueryTriggerInteraction.Ignore) && h.point.y > WaterLine)
+                    {
+                        minX = Mathf.Min(minX, cx); maxX = Mathf.Max(maxX, cx);
+                        minZ = Mathf.Min(minZ, cz); maxZ = Mathf.Max(maxZ, cz);
+                    }
+            if (minX > maxX)
+            {
+                Logger.LogWarning("No land found for the walkability grid");
+                return;
+            }
+            float MinX = minX - Margin, MinZ = minZ - Margin;
+            int Width = Mathf.CeilToInt((maxX - minX + 2 * Margin) / Cell);
+            int Depth = Mathf.CeilToInt((maxZ - minZ + 2 * Margin) / Cell);
+            using (var file = File.Create(path))
+            using (var gz = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            using (var w = new BinaryWriter(gz))
+            {
+                w.Write(new[] { (byte)'T', (byte)'B', (byte)'N', (byte)'G' });
+                w.Write(1u);
+                w.Write(MinX);
+                w.Write(MinZ);
+                w.Write(Cell);
+                w.Write((uint)Width);
+                w.Write((uint)Depth);
+                var row = new byte[Width * 2];
+                for (int zi = 0; zi < Depth; zi++)
+                {
+                    float z = MinZ + (zi + 0.5f) * Cell;
+                    for (int xi = 0; xi < Width; xi++)
+                    {
+                        float x = MinX + (xi + 0.5f) * Cell;
+                        ushort v = 0;
+                        if (Physics.Raycast(new Vector3(x, 2000f, z), Vector3.down, out RaycastHit hit, 4000f, ~0, QueryTriggerInteraction.Ignore)
+                            && hit.point.y > WaterLine)
+                        {
+                            v = (ushort)Mathf.Clamp(Mathf.RoundToInt((hit.point.y - 100f) * 64f), 1, 65535);
+                        }
+                        row[xi * 2] = (byte)v;
+                        row[xi * 2 + 1] = (byte)(v >> 8);
+                    }
+                    w.Write(row);
+                }
+            }
+            Logger.LogInfo($"Wrote the {Width}x{Depth} walkability grid to {path} in {sw.ElapsedMilliseconds} ms");
         }
 
         private const float CarsWaitSeconds = 120f;

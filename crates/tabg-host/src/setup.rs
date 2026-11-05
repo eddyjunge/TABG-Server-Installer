@@ -205,6 +205,7 @@ pub fn dump_world(
 
     let out = paths.dumper_workdir().join("world.json");
     let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(out.with_extension("nav"));
     progress("loading the map in the dedicated server (about a minute)");
     let mut cmd = Command::new(work.join("TABG.exe"));
     cmd.current_dir(&work)
@@ -275,6 +276,11 @@ pub fn dump_world(
     let cached = paths.world_cache().join(format!("{version}{suffix}.json"));
     std::fs::create_dir_all(paths.world_cache()).map_err(|e| e.to_string())?;
     std::fs::copy(&out, &cached).map_err(|e| e.to_string())?;
+    // The bots' walkability grid comes out next to the JSON.
+    let nav = out.with_extension("nav");
+    if nav.exists() {
+        std::fs::copy(&nav, cached.with_extension("nav")).map_err(|e| e.to_string())?;
+    }
     progress(&match &world.brawl {
         None if world.bomb.is_some() => "Bomb map data ready".to_owned(),
         Some(b) => format!(

@@ -32,6 +32,7 @@ pub struct Loaded {
     pub config: ServerToml,
     pub install: Install,
     pub world: tabg_world::World,
+    pub world_path: std::path::PathBuf,
 }
 
 pub fn load(paths: &Paths) -> Result<Loaded, String> {
@@ -64,6 +65,7 @@ pub fn load(paths: &Paths) -> Result<Loaded, String> {
         config,
         install,
         world,
+        world_path,
     })
 }
 
@@ -71,6 +73,7 @@ pub fn load(paths: &Paths) -> Result<Loaded, String> {
 pub fn room_settings(loaded: &Loaded) -> Result<RoomSettings, String> {
     let mut base = RoomSettings::default();
     tabg_server::apply_world(&mut base, &loaded.world)?;
+    base.nav = tabg_server::load_nav(&loaded.world_path);
     let mut s = loaded.config.room_settings(&base);
     s.seed = crate::paths::now() ^ 0x9e37_79b9_7f4a_7c15;
     Ok(s)

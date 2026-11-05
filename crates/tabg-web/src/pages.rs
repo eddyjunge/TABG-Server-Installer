@@ -396,6 +396,7 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                         (field("Tick rate", "tick_rate", g.tick_rate, "Movement updates per second."))
                     (field("Voice range (m)", "voice_range", g.voice_range, "For friends with the ProximityChat mod; 0: off."))
                     (check("Allow any outfit (custom-game-skins mod)", "skins", g.skins))
+                    (field("Bots", "bots", g.bots, "Fill island matches with bots (they count towards players to start)."))
                     (check("Spell drops (blessings from the sky)", "spell_drops", g.spell_drops))
                     (check("Respawn minigame (boss fight after an early death)", "respawn_minigame", g.respawn_minigame))
                     }
@@ -693,6 +694,7 @@ fn settings_from_form(
     parse(f, "voice_range", &mut c.game.voice_range)?;
     c.game.skins = f.contains_key("skins");
     c.game.spell_drops = f.contains_key("spell_drops");
+    parse(f, "bots", &mut c.game.bots)?;
     c.game.respawn_minigame = f.contains_key("respawn_minigame");
     c.rules.respawn = f.contains_key("respawn");
     parse(f, "respawn_delay", &mut c.rules.respawn_delay)?;

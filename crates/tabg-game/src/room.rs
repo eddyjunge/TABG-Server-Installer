@@ -42,6 +42,7 @@ use crate::rng::Rng;
 use crate::settings::{RoomSettings, SpawnPoint};
 
 mod bomb;
+mod bots;
 mod console;
 mod extras;
 mod inventory;
@@ -139,6 +140,50 @@ struct Player {
     boss_done: bool,
 }
 
+impl Player {
+    fn new(index: u8, group: u8, name: String, id: String, squad_id: u64) -> Self {
+        Self {
+            index,
+            group,
+            name,
+            id,
+            gear: Vec::new(),
+            colour: 0,
+            squad_id,
+            in_world: false,
+            position: [0.0; 3],
+            rotation: [0.0; 2],
+            ads: false,
+            direction: PackedDirection::ZERO,
+            movement: 0,
+            dirty: false,
+            dropped: true,
+            landed: true,
+            alive: true,
+            health: 100.0,
+            downed: false,
+            down_time: 0.0,
+            last_attacker: NOBODY,
+            kills: 0,
+            chunk: (0, 0),
+            area: Vec::new(),
+            equipment: NO_EQUIPMENT,
+            attachments: Vec::new(),
+            weapon_type: NO_WEAPON,
+            seat: None,
+            is_admin: false,
+            last_parrot: f32::MIN,
+            respawn_at: None,
+            level: 0,
+            voice_window: (f32::MIN, 0),
+            last_outfit: f32::MIN,
+            inventory: BTreeMap::new(),
+            boss_fight: false,
+            boss_done: false,
+        }
+    }
+}
+
 /// One TABG match.
 #[derive(Debug)]
 pub struct Room {
@@ -175,6 +220,8 @@ pub struct Room {
     /// Spell drops this match, by network index.
     drops: Vec<extras::Drop>,
     next_drop_at: Option<f32>,
+    /// Server-side players and their minds.
+    bots: bots::Brains,
 }
 
 impl Room {
@@ -205,6 +252,7 @@ impl Room {
             souls: BTreeMap::new(),
             drops: Vec::new(),
             next_drop_at: None,
+            bots: BTreeMap::new(),
         };
         room.spawn_cars();
         room
@@ -600,43 +648,10 @@ impl Room {
         self.players.insert(
             peer,
             Player {
-                index: peer,
-                group,
-                name: name.clone(),
-                id: id.clone(),
                 gear: req.gear.clone(),
                 colour: req.colour,
-                squad_id: req.squad_id,
-                in_world: false,
-                position: [0.0; 3],
-                rotation: [0.0; 2],
-                ads: false,
-                direction: PackedDirection::ZERO,
-                movement: 0,
-                dirty: false,
-                dropped: true,
-                landed: true,
-                alive: true,
-                health: 100.0,
-                downed: false,
-                down_time: 0.0,
-                last_attacker: NOBODY,
-                kills: 0,
-                chunk: (0, 0),
-                area: Vec::new(),
-                equipment: NO_EQUIPMENT,
-                attachments: Vec::new(),
-                weapon_type: NO_WEAPON,
-                seat: None,
                 is_admin: self.is_admin_name(&name, &id),
-                last_parrot: f32::MIN,
-                respawn_at: None,
-                level: 0,
-                voice_window: (f32::MIN, 0),
-                last_outfit: f32::MIN,
-                inventory: BTreeMap::new(),
-                boss_fight: false,
-                boss_done: false,
+                ..Player::new(peer, group, name.clone(), id.clone(), req.squad_id)
             },
         );
 
@@ -1959,8 +1974,15 @@ impl Room {
             }
             game_state::ENDED => {
                 if self.ended_at.is_some_and(|t| now - t >= RESTART_AFTER_END) {
-                    self.to_disconnect.extend(self.players.keys().copied());
+                    let humans: Vec<u8> = self
+                        .players
+                        .keys()
+                        .copied()
+                        .filter(|p| !self.is_bot(*p))
+                        .collect();
+                    self.to_disconnect.extend(humans);
                     self.players.clear();
+                    self.bots.clear();
                 }
                 if self.players.is_empty() {
                     self.reset();
@@ -1992,6 +2014,7 @@ impl Room {
         self.drops.clear();
         self.next_drop_at = None;
         self.match_started_at = now;
+        self.bots_board();
         let (modifier, loot) =
             LootWorld::spawn(&self.settings.loot, self.settings.loot_keep, &mut self.rng);
         self.modifier = modifier;
@@ -2076,6 +2099,7 @@ impl Room {
         let dt = self.last_now.map_or(0.0, |t| (now - t).max(0.0));
         self.last_now = Some(now);
         let mut out = self.tick_match(now, dt);
+        out.extend(self.tick_bots(now, dt));
         out.extend(self.tick_movement(now));
         out
     }
@@ -4054,5 +4078,94 @@ mod tests {
         assert!(events(&out, EventCode::TeamDead).is_empty());
         let out = room.handle(2, &Packet::new(EventCode::BossFightResult, vec![0, 0]));
         assert_eq!(events(&out, EventCode::TeamDead).len(), 1);
+    }
+
+    fn flat_island() -> std::sync::Arc<crate::nav::NavGrid> {
+        // 4 km × 4 km of flat ground at 120 m, 4 m cells.
+        let n = 1000;
+        std::sync::Arc::new(crate::nav::NavGrid {
+            min_x: -2000.0,
+            min_z: -2000.0,
+            cell: 4.0,
+            width: n,
+            depth: n,
+            heights: vec![20 * 64; n * n],
+        })
+    }
+
+    #[test]
+    fn bots_join_jump_land_armed_and_fight() {
+        let mut room = Room::new(RoomSettings {
+            bots: 2,
+            nav: Some(flat_island()),
+            players_to_start: 3,
+            countdown: 1.0,
+            ..Default::default()
+        });
+        join(&mut room, 0, "human");
+        enter(&mut room, 0);
+        let out = room.tick(0.1);
+        assert_eq!(events(&out, EventCode::Login).len(), 2, "two bots joined");
+        assert!(room.is_bot(253) && room.is_bot(252) && !room.is_bot(0));
+        // Countdown, plane; everyone is out of the plane by the end of the flight.
+        let out = run(&mut room, 0.1, 60.0);
+        assert_eq!(room.state(), game_state::STARTED);
+        let landed: Vec<_> = events(&out, EventCode::PlayerLand)
+            .iter()
+            .filter(|o| room.is_bot(o.packet.payload[0]))
+            .map(|o| o.packet.payload[0])
+            .collect();
+        assert_eq!(landed.len(), 2, "both bots landed");
+        assert_eq!(
+            events(&out, EventCode::WeaponChanged).len(),
+            2,
+            "and took out a gun"
+        );
+        // Put the human right next to a bot: it turns and shoots.
+        let bot_pos = room.players[&253].position;
+        let p = room.players.get_mut(&0).unwrap();
+        p.position = [bot_pos[0] + 8.0, bot_pos[1], bot_pos[2]];
+        p.dropped = true;
+        p.landed = true;
+        let out = run(&mut room, 60.0, 60.4);
+        assert!(
+            room.players[&0].health == 100.0
+                && events(&out, EventCode::PlayerDamaged)
+                    .iter()
+                    .all(|o| o.packet.payload.first() != Some(&0)),
+            "a bot takes a moment to react"
+        );
+        let out = run(&mut room, 60.4, 70.0);
+        assert!(
+            !events(&out, EventCode::PlayerFire).is_empty(),
+            "bots shoot"
+        );
+        assert!(
+            !events(&out, EventCode::PlayerDamaged).is_empty(),
+            "and hit"
+        );
+        assert!(room.players[&0].health < 100.0 || !room.players[&0].alive);
+    }
+
+    #[test]
+    fn bots_walk_when_nobody_is_around() {
+        let mut room = Room::new(RoomSettings {
+            bots: 1,
+            nav: Some(flat_island()),
+            players_to_start: 2,
+            countdown: 1.0,
+            ..Default::default()
+        });
+        join(&mut room, 0, "human");
+        enter(&mut room, 0);
+        run(&mut room, 0.0, 60.0);
+        // Keep the human far away so the bot wanders.
+        room.players.get_mut(&0).unwrap().position = [1900.0, 120.0, 1900.0];
+        let before = room.players[&253].position;
+        run(&mut room, 60.0, 80.0);
+        let after = room.players[&253].position;
+        let moved = (after[0] - before[0]).hypot(after[2] - before[2]);
+        assert!(moved > 5.0, "the bot walked {moved} m");
+        assert_eq!(after[1], 120.0, "on the ground");
     }
 }

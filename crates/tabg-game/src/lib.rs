@@ -9,6 +9,7 @@
 pub mod brawl;
 pub mod cars;
 pub mod loot;
+pub mod nav;
 pub mod plane;
 pub mod ring;
 pub mod rng;

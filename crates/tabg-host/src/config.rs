@@ -146,6 +146,8 @@ pub struct Game {
     pub spell_drops: bool,
     /// An early death in Battle Royale goes to the boss fight for a second chance.
     pub respawn_minigame: bool,
+    /// Bots that join the island's matches to fill them up.
+    pub bots: u8,
 }
 
 impl Default for Game {
@@ -172,6 +174,7 @@ impl Default for Game {
             skins: false,
             spell_drops: true,
             respawn_minigame: false,
+            bots: 0,
         }
     }
 }
@@ -393,6 +396,12 @@ impl ServerToml {
         if !(0.0..=1000.0).contains(&g.voice_range) {
             p.push(problem("game.voice_range", "0 (off) to 1000 metres"));
         }
+        if g.bots > 50 || usize::from(g.bots) + usize::from(g.max_players) > 250 {
+            p.push(problem(
+                "game.bots",
+                "at most 50 bots, and bots + max players at most 250",
+            ));
+        }
         if !(1..=60).contains(&g.tick_rate) {
             p.push(problem("game.tick_rate", "1 to 60 per second"));
         }
@@ -409,6 +418,12 @@ impl ServerToml {
             p.push(problem(
                 "ring.sizes",
                 "each ring must be smaller than the one before",
+            ));
+        }
+        if g.mode == GameMode::Test && g.map == Map::Island {
+            p.push(problem(
+                "game.map",
+                "Test mode needs the range or dev_test map (TABG loads its DevTest scene for Test mode)",
             ));
         }
         if matches!(g.mode, GameMode::Brawl | GameMode::Bomb) && g.map != Map::Island {
@@ -497,6 +512,7 @@ impl ServerToml {
             s.spell_drops = None;
         }
         s.respawn_minigame = g.respawn_minigame;
+        s.bots = g.bots;
         if g.map != Map::Island {
             // Mod maps: Test mode at the map's own spawns; the island's loot and cars don't apply.
             s.game_mode = 2;

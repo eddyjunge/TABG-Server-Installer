@@ -104,6 +104,12 @@ pub struct RoomSettings {
     pub spell_drops: Option<crate::room::SpellDrops>,
     /// The respawn minigame: an early death in Battle Royale goes to the boss fight.
     pub respawn_minigame: bool,
+    /// Bots to fill the match with (Battle Royale / Test on the island; needs `nav`).
+    pub bots: u8,
+    /// Every bot jumps at this fraction of the flight (testing); random when `None`.
+    pub bot_jump: Option<f32>,
+    /// The island's walkability grid (from the dumper), for bots.
+    pub nav: Option<std::sync::Arc<crate::nav::NavGrid>>,
     /// Bomb map data and rules (from a Bomb map dump); used when `game_mode` is Bomb.
     pub bomb: Option<BombRules>,
     /// Brawl houses and loot (from a Brawl map dump); used when `game_mode` is Brawl.
@@ -166,6 +172,9 @@ impl Default for RoomSettings {
             drop_loot_on_death: true,
             spell_drops: None,
             respawn_minigame: false,
+            bots: 0,
+            bot_jump: None,
+            nav: None,
             tick_rate: 30,
             seed: 0x7ab6,
         }
