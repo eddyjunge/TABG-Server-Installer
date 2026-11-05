@@ -142,6 +142,10 @@ pub struct Game {
     pub voice_range: f32,
     /// Let friends with the custom-game-skins mod wear any built-in outfit.
     pub skins: bool,
+    /// Blessing drops fall from the sky during Battle Royale (official default: on).
+    pub spell_drops: bool,
+    /// An early death in Battle Royale goes to the boss fight for a second chance.
+    pub respawn_minigame: bool,
 }
 
 impl Default for Game {
@@ -166,6 +170,8 @@ impl Default for Game {
             tick_rate: d.tick_rate,
             voice_range: d.voice_range,
             skins: false,
+            spell_drops: true,
+            respawn_minigame: false,
         }
     }
 }
@@ -487,6 +493,10 @@ impl ServerToml {
         s.tick_rate = g.tick_rate;
         s.voice_range = g.voice_range;
         s.skins = g.skins;
+        if !g.spell_drops {
+            s.spell_drops = None;
+        }
+        s.respawn_minigame = g.respawn_minigame;
         if g.map != Map::Island {
             // Mod maps: Test mode at the map's own spawns; the island's loot and cars don't apply.
             s.game_mode = 2;

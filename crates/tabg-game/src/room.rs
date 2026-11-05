@@ -43,11 +43,13 @@ use crate::settings::{RoomSettings, SpawnPoint};
 
 mod bomb;
 mod console;
+mod extras;
 mod inventory;
 mod maps;
 mod skins;
 mod voice;
 pub use console::{PlayerInfo, RoomEvent};
+pub use extras::SpellDrops;
 
 /// After a match ends, players are disconnected this long later and the room resets (the official
 /// server terminates 15 s after the end).
@@ -131,6 +133,10 @@ struct Player {
     last_outfit: f32,
     /// Item id → quantity carried (see `room/inventory.rs`).
     inventory: BTreeMap<i32, i32>,
+    /// Dead and playing the respawn minigame.
+    boss_fight: bool,
+    /// Had the respawn minigame this match.
+    boss_done: bool,
 }
 
 /// One TABG match.
@@ -166,6 +172,9 @@ pub struct Room {
     bomb: Option<bomb::BombState>,
     /// Soul loot network id → whose soul it is.
     souls: BTreeMap<i32, u8>,
+    /// Spell drops this match, by network index.
+    drops: Vec<extras::Drop>,
+    next_drop_at: Option<f32>,
 }
 
 impl Room {
@@ -194,6 +203,8 @@ impl Room {
             skins_authorized: Vec::new(),
             bomb: None,
             souls: BTreeMap::new(),
+            drops: Vec::new(),
+            next_drop_at: None,
         };
         room.spawn_cars();
         room
@@ -311,6 +322,8 @@ impl Room {
             Some(EventCode::RequestWorldState) => self.world_state(peer),
             Some(EventCode::RequestPurchaseGun) => self.bomb_purchase(peer, &packet.payload),
             Some(EventCode::RequestBlessing) => self.blessing(peer, &packet.payload),
+            Some(EventCode::RequestClickInteract) => self.open_drop(peer, &packet.payload),
+            Some(EventCode::BossFightResult) => self.boss_fight_result(peer, &packet.payload),
             Some(EventCode::RequestCurseCleanse) => self.cleanse_curse(peer, &packet.payload),
             Some(EventCode::RequestRespawnTeamMate) => self.respawn_teammate(peer, &packet.payload),
             Some(EventCode::RequestPlantBomb) => self.bomb_plant(peer, &packet.payload),
@@ -622,6 +635,8 @@ impl Room {
                 voice_window: (f32::MIN, 0),
                 last_outfit: f32::MIN,
                 inventory: BTreeMap::new(),
+                boss_fight: false,
+                boss_done: false,
             },
         );
 
@@ -1550,11 +1565,17 @@ impl Room {
             killer: killer_name,
             ring: ring_death,
         });
-        let spectate = self
-            .players
-            .values()
-            .find(|m| m.group == group && m.alive && m.index != victim)
-            .map_or(NOBODY, |m| m.index);
+        let spectate = if self.enters_boss_fight(victim) {
+            let p = self.players.get_mut(&victim).expect("still here");
+            p.boss_fight = true;
+            p.boss_done = true;
+            extras::BOSS_FIGHT
+        } else {
+            self.players
+                .values()
+                .find(|m| m.group == group && m.alive && m.index != victim)
+                .map_or(NOBODY, |m| m.index)
+        };
         let dead = PlayerDead {
             victim,
             last_attacker,
@@ -1607,19 +1628,29 @@ impl Room {
             }
             return out;
         }
-        if !self.players.values().any(|m| m.group == group && m.alive) {
-            let placement = u8::try_from(self.alive_teams().len() + 1).unwrap_or(u8::MAX);
-            out.push(Self::broadcast(
-                EventCode::TeamDead,
-                TeamDead {
-                    group,
-                    placement,
-                    finished: Vec::new(),
-                }
-                .encode(),
-            ));
-        }
+        out.extend(self.team_dead_if_out(group));
         out
+    }
+
+    /// `TeamDead` once nobody in `group` is alive or still fighting the boss.
+    fn team_dead_if_out(&self, group: u8) -> Vec<Outgoing> {
+        if self
+            .players
+            .values()
+            .any(|m| m.group == group && (m.alive || m.boss_fight))
+        {
+            return Vec::new();
+        }
+        let placement = u8::try_from(self.alive_teams().len() + 1).unwrap_or(u8::MAX);
+        vec![Self::broadcast(
+            EventCode::TeamDead,
+            TeamDead {
+                group,
+                placement,
+                finished: Vec::new(),
+            }
+            .encode(),
+        )]
     }
 
     /// `ReviveState`: a teammate starts, stops or finishes reviving a downed player.
@@ -1819,7 +1850,7 @@ impl Room {
         let mut teams: Vec<u8> = self
             .players
             .values()
-            .filter(|p| p.alive)
+            .filter(|p| p.alive || p.boss_fight)
             .map(|p| p.group)
             .collect();
         teams.sort_unstable();
@@ -1894,6 +1925,7 @@ impl Room {
                 }
                 let ring_events = self.ring.tick(now, &mut self.rng);
                 out.extend(Self::ring_events(ring_events));
+                out.extend(self.tick_spell_drops(now));
                 let winner = if self.is_brawl() {
                     out.extend(self.respawn_due(now));
                     self.brawl_winner()
@@ -1953,8 +1985,12 @@ impl Room {
             p.respawn_at = None;
             p.level = 0;
             p.inventory.clear();
+            p.boss_fight = false;
+            p.boss_done = false;
         }
         self.souls.clear();
+        self.drops.clear();
+        self.next_drop_at = None;
         self.match_started_at = now;
         let (modifier, loot) =
             LootWorld::spawn(&self.settings.loot, self.settings.loot_keep, &mut self.rng);
@@ -2015,6 +2051,7 @@ impl Room {
             state: "started".into(),
         });
         let ring_events = self.ring.start(now);
+        self.schedule_first_drop(now);
         let mut out = vec![Self::state_changed(flying)];
         out.extend(Self::ring_events(ring_events));
         out
@@ -3931,5 +3968,91 @@ mod tests {
         );
         assert!(room.players()[1].alive);
         assert_eq!(room.carried(0, 10), 0, "the soul is spent");
+    }
+
+    #[test]
+    fn spell_drops_fall_in_the_ring_and_spill_blessings() {
+        let mut room = fight_room_with(
+            RoomSettings {
+                spell_drops: Some(SpellDrops {
+                    interval: [100.0, 100.0],
+                    rare: vec![106],
+                    epic: vec![59],
+                    legendary: vec![83],
+                }),
+                loot: crate::loot::LootRules {
+                    spots: vec![crate::loot::Spot {
+                        position: [0.0, 150.0, 0.0],
+                        force: false,
+                    }],
+                    modifiers: Vec::new(),
+                },
+                ..Default::default()
+            },
+            &[(0, 1), (1, 2)],
+        );
+        room.ring.white_center = [0.0; 3];
+        room.ring.white_size = 1000.0;
+        let out = run(&mut room, 1.5, 105.0);
+        let spawned = events(&out, EventCode::DropSpawned);
+        assert_eq!(spawned.len(), 1, "first drop 60–100 s after the start");
+        let payload = &spawned[0].packet.payload;
+        assert_eq!(&payload[..4], &0i32.to_le_bytes());
+        let rarity = payload[16];
+        let mut w = tabg_protocol::Writer::new();
+        w.u8(0).i32(0);
+        let click = w.into_inner();
+        let out = room.handle(
+            0,
+            &Packet::new(EventCode::RequestClickInteract, click.clone()),
+        );
+        let opened = &out[0].packet.payload;
+        let expected = match rarity {
+            3 => 1,
+            2 => 2,
+            _ => 3,
+        };
+        assert_eq!(opened[4], expected);
+        assert!(
+            room.handle(1, &Packet::new(EventCode::RequestClickInteract, click))
+                .is_empty(),
+            "only once"
+        );
+    }
+
+    #[test]
+    fn early_deaths_go_to_the_boss_fight() {
+        let mut room = fight_room_with(
+            RoomSettings {
+                respawn_minigame: true,
+                ..Default::default()
+            },
+            &[(0, 1), (1, 2), (2, 3)],
+        );
+        let out = hit(&mut room, 0, 1, 0.0);
+        let dead =
+            PlayerDead::decode(&events(&out, EventCode::PlayerDead)[0].packet.payload).unwrap();
+        assert_eq!(dead.spectate, 254, "into the boss fight");
+        assert!(
+            events(&out, EventCode::TeamDead).is_empty(),
+            "not out while fighting the boss"
+        );
+        let out = room.handle(1, &Packet::new(EventCode::BossFightResult, vec![1, 1]));
+        assert_eq!(
+            out[0].packet.event(),
+            Some(EventCode::PlayerRespawnFromBoss)
+        );
+        assert!(room.players()[1].alive);
+        // Only once per match: the next death is final.
+        let out = hit(&mut room, 0, 1, 0.0);
+        let dead =
+            PlayerDead::decode(&events(&out, EventCode::PlayerDead)[0].packet.payload).unwrap();
+        assert_ne!(dead.spectate, 254);
+        assert_eq!(events(&out, EventCode::TeamDead).len(), 1);
+        // A lost fight puts the team out.
+        let out = hit(&mut room, 0, 2, 0.0);
+        assert!(events(&out, EventCode::TeamDead).is_empty());
+        let out = room.handle(2, &Packet::new(EventCode::BossFightResult, vec![0, 0]));
+        assert_eq!(events(&out, EventCode::TeamDead).len(), 1);
     }
 }

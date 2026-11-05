@@ -70,6 +70,9 @@ struct Args {
     /// Play a client-mod map in Test mode: `range` or `dev-test` (sets its spawn points).
     #[arg(long)]
     test_map: Option<String>,
+    /// Early Battle Royale deaths go to the boss fight (the respawn minigame).
+    #[arg(long)]
+    respawn_minigame: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +137,7 @@ fn main() {
         loadout,
         respawn: args.respawn.map(|delay| tabg_game::Respawn { delay }),
         kills_to_win: args.kills_to_win,
+        respawn_minigame: args.respawn_minigame,
         spawn_points: vec![SpawnPoint {
             position: FALLBACK_SPAWN,
             rotation: 0.0,

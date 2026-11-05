@@ -288,8 +288,32 @@ namespace Tabg.WorldDumper
                 return;
             var curses = Field(CurseDatabase.Instance, "m_Curses") as System.Collections.IDictionary;
             var keys = curses == null ? new string[0] : curses.Keys.Cast<object>().Select(k => Convert.ToInt32(k).ToString(CultureInfo.InvariantCulture)).ToArray();
+            // Blessing pickups by rarity (spell drops hand these out), from the blessing loot preset.
+            var byRarity = new System.Collections.Generic.SortedDictionary<string, System.Collections.Generic.List<int>>();
+            var preset = CurseDatabase.Instance != null ? CurseDatabase.Instance.lp_blessings : null;
+            foreach (var drop in preset != null && preset.loot != null ? preset.loot : new System.Collections.Generic.List<LootDropWrapper>())
+            {
+                GameObject go = drop.m_loot != null && drop.m_loot.Length > 0 ? drop.m_loot[0].loot : null;
+                Pickup pickup = go != null ? go.GetComponent<Pickup>() : null;
+                Component bp = go != null ? go.GetComponent(HarmonyLib.AccessTools.TypeByName("BlessingPickup")) : null;
+                object rarity = Prop(Field(bp, "currentBlessing"), "rarity") ?? Field(Field(bp, "currentBlessing"), "rarity");
+                if (pickup == null || rarity == null)
+                    continue;
+                string r = rarity.ToString().ToLowerInvariant();
+                if (!byRarity.ContainsKey(r))
+                    byRarity[r] = new System.Collections.Generic.List<int>();
+                byRarity[r].Add(pickup.m_itemIndex);
+            }
+            // Spell drop timing (Spelldrop_Server on the server's scene).
+            Type dropType = HarmonyLib.AccessTools.TypeByName("Spelldrop_Server");
+            UnityEngine.Object dropper = dropType != null ? FindObjectOfType(dropType) : null;
+            object min = Field(dropper, "min"), max = Field(dropper, "max");
             sb.Append(",\n  \"souls\": {\"soul_item\": ").Append(soulItem.ToString(CultureInfo.InvariantCulture))
-              .Append(", \"curses\": [").Append(string.Join(", ", keys)).Append("]}");
+              .Append(", \"curses\": [").Append(string.Join(", ", keys)).Append("]")
+              .Append(", \"blessings\": {").Append(string.Join(", ", byRarity.Select(kv => Quote(kv.Key) + ": [" + string.Join(", ", kv.Value) + "]"))).Append("}");
+            if (min is float mn && max is float mx)
+                sb.Append(", \"spell_drop_interval\": [").Append(F(mn)).Append(", ").Append(F(mx)).Append("]");
+            sb.Append("}");
         }
 
         private const float CarsWaitSeconds = 120f;

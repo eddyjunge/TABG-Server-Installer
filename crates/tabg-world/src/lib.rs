@@ -101,6 +101,12 @@ pub struct SoulsData {
     pub soul_item: i32,
     #[serde(default)]
     pub curses: Vec<i32>,
+    /// Blessing pickups by rarity (`common`, `rare`, `epic`, `legendary`).
+    #[serde(default)]
+    pub blessings: std::collections::BTreeMap<String, Vec<i32>>,
+    /// Seconds between spell drops (official `Spelldrop_Server`), if the map has them.
+    #[serde(default)]
+    pub spell_drop_interval: Option<[f32; 2]>,
 }
 
 /// Bomb map data (from a dump of the dedicated server in Bomb mode).

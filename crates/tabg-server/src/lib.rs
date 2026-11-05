@@ -359,6 +359,15 @@ pub fn apply_world(settings: &mut RoomSettings, world: &tabg_world::World) -> Re
         settings.ring.hot_spots.clone_from(&ring.hot_spots);
     }
     if let Some(souls) = &world.souls {
+        if let Some(interval) = souls.spell_drop_interval {
+            let pool = |r: &str| souls.blessings.get(r).cloned().unwrap_or_default();
+            settings.spell_drops = Some(tabg_game::SpellDrops {
+                interval,
+                rare: pool("rare"),
+                epic: pool("epic"),
+                legendary: pool("legendary"),
+            });
+        }
         settings.soul_item = Some(souls.soul_item);
         settings.curses = souls
             .curses

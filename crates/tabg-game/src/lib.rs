@@ -16,5 +16,5 @@ mod room;
 mod settings;
 
 pub use ring::RingRules;
-pub use room::{Outgoing, PlayerInfo, RESTART_AFTER_END, Recipients, Room, RoomEvent};
+pub use room::{Outgoing, PlayerInfo, RESTART_AFTER_END, Recipients, Room, RoomEvent, SpellDrops};
 pub use settings::{BombRules, ForceStart, Respawn, RoomSettings, SpawnPoint, TestMap};

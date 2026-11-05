@@ -100,6 +100,10 @@ pub struct RoomSettings {
     pub curses: Vec<u8>,
     /// The dead drop what they carry (official behaviour).
     pub drop_loot_on_death: bool,
+    /// Spell drops (blessings falling from the sky) during Battle Royale.
+    pub spell_drops: Option<crate::room::SpellDrops>,
+    /// The respawn minigame: an early death in Battle Royale goes to the boss fight.
+    pub respawn_minigame: bool,
     /// Bomb map data and rules (from a Bomb map dump); used when `game_mode` is Bomb.
     pub bomb: Option<BombRules>,
     /// Brawl houses and loot (from a Brawl map dump); used when `game_mode` is Brawl.
@@ -160,6 +164,8 @@ impl Default for RoomSettings {
             soul_item: None,
             curses: Vec::new(),
             drop_loot_on_death: true,
+            spell_drops: None,
+            respawn_minigame: false,
             tick_rate: 30,
             seed: 0x7ab6,
         }
