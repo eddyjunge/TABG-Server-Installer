@@ -22,6 +22,8 @@ namespace Tabg.DevAutoJoin
     ///   TABG_AUTOJOIN_JUMP   jump out of the plane at this fraction of its 45 s flight (e.g. 0.5)
     ///   TABG_AUTOJOIN_SEAT   seconds after jumping to get into the nearest car's driver seat
     ///   TABG_AUTOJOIN_CHAT   "text@seconds" (after joining) to send a chat line, e.g. "/give 131 5@20"
+    ///   TABG_AUTOJOIN_HEAL   item id to heal with (once), as soon as the local player is hurt, e.g. 131
+    ///   TABG_AUTOJOIN_DROP   "item:count@seconds" (after joining) to drop from the inventory, e.g. "132:1@75"
     ///
     /// Logs scene changes, every event the client receives, and the local player's position, and
     /// saves screenshots to BepInEx/autojoin-*.png.
@@ -43,6 +45,10 @@ namespace Tabg.DevAutoJoin
         private string _chatText;
         private float _chatAt = -1f;
         internal static float FlyingSince = -1f;
+        private int _healItem = -1;
+        private int _dropItem = -1;
+        private int _dropCount;
+        private float _dropAt = -1f;
         private float[] _shotTimes = { 10f, 30f, 50f, 60f, 70f, 85f };
 
         private void Awake()
@@ -79,6 +85,26 @@ namespace Tabg.DevAutoJoin
             {
                 _chatText = chat.Substring(0, at);
                 _chatAt = chatAt;
+            }
+
+            if (!int.TryParse(Environment.GetEnvironmentVariable("TABG_AUTOJOIN_HEAL"), out _healItem))
+            {
+                _healItem = -1;
+            }
+
+            string drop = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_DROP");
+            int dropAt = drop?.LastIndexOf('@') ?? -1;
+            int colon = drop?.IndexOf(':') ?? -1;
+            if (dropAt > 0 && colon > 0 && colon < dropAt
+                && int.TryParse(drop.Substring(0, colon), out _dropItem)
+                && int.TryParse(drop.Substring(colon + 1, dropAt - colon - 1), out _dropCount)
+                && float.TryParse(drop.Substring(dropAt + 1), NumberStyles.Float, CultureInfo.InvariantCulture, out _dropAt))
+            {
+                Logger.LogInfo($"will drop {_dropCount} x {_dropItem} at {_dropAt} s");
+            }
+            else
+            {
+                _dropAt = -1f;
             }
 
             if (_jumpAt <= 0f)
@@ -137,6 +163,32 @@ namespace Tabg.DevAutoJoin
             FindObjectOfType<PhotonServerHandler>()?.ClientRequestSeat(seat, SeatAction.GetIn);
         }
 
+        /// Heal and drop through the client's own inventory code, like a player would.
+        private void TickInventory()
+        {
+            Player me = Player.localPlayer;
+            if (me == null)
+            {
+                return;
+            }
+
+            if (_healItem >= 0 && me.m_playerDeath.health < 100f && !me.m_playerDeath.isDown && !me.m_playerDeath.dead)
+            {
+                int have = me.m_inventory.GetPickupTypeCountInInventory(_healItem);
+                Logger.LogInfo($"Hurt ({me.m_playerDeath.health:F0} HP): healing with item {_healItem}, carrying {have}");
+                InventoryUI.RequestHealingUsingItemType(_healItem);
+                _healItem = -1;
+            }
+
+            if (_dropAt >= 0f && _sinceJoin >= _dropAt)
+            {
+                _dropAt = -1f;
+                int have = me.m_inventory.GetPickupTypeCountInInventory(_dropItem);
+                Logger.LogInfo($"Dropping {_dropCount} x item {_dropItem}, carrying {have}");
+                me.m_interactionHandler.Drop(_dropItem, _dropCount);
+            }
+        }
+
         private void Update()
         {
             float dt = Time.unscaledDeltaTime;
@@ -177,6 +229,7 @@ namespace Tabg.DevAutoJoin
                 Logger.LogInfo($"Saying: {_chatText}");
                 FindObjectOfType<PhotonServerHandler>()?.SendChatMessage(_chatText);
             }
+            TickInventory();
             if (_shot < _shotTimes.Length && _sinceJoin >= _shotTimes[_shot])
             {
                 string path = Path.Combine(Paths.BepInExRootPath, $"autojoin-{_shot}.png");

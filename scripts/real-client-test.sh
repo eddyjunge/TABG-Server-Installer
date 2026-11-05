@@ -10,6 +10,8 @@
 #   TABG_WORLD        world file for the server (default target/tabg-world.json)
 #   TABG_TEST_PLUGINS extra client plugin DLLs to install (space-separated paths)
 #   TABG_TEST_SERVER_ARGS extra tabg-server flags (e.g. "--loadout 160:1,6:240")
+#   TABG_TEST_HEAL    item id the client heals with once it's hurt (e.g. 131 = bandage)
+#   TABG_TEST_DROP    "item:count@seconds" the client drops (e.g. "132:1@80")
 #   TABG_TEST_RELAY=1 host through Unity Relay and join by code (needs internet) instead of 127.0.0.1
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -64,7 +66,7 @@ fi
   cd "$TEST"
   export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/823130"
   export STEAM_COMPAT_APP_ID=823130 SteamAppId=823130 SteamGameId=823130
-  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN="$JOIN" TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}"
+  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN="$JOIN" TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}" TABG_AUTOJOIN_HEAL="${TABG_TEST_HEAL:-}" TABG_AUTOJOIN_DROP="${TABG_TEST_DROP:-}"
   exec "$PROTON" run "$TEST/TotallyAccurateBattlegrounds.exe" > "$PWD/../client-proton.log" 2>&1
 ) &
 CLIENT=$!
