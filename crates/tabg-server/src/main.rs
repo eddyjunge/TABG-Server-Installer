@@ -79,6 +79,9 @@ struct Args {
     /// Bots jump at this fraction of the flight (testing: match TABG_TEST_JUMP to land together).
     #[arg(long)]
     bot_jump: Option<f32>,
+    /// Show the bots on the admin-radar client mod: off, admins or everyone.
+    #[arg(long, default_value = "off", value_parser = ["off", "admins", "everyone"])]
+    bot_radar: String,
 }
 
 #[derive(Clone, Debug)]
@@ -146,6 +149,11 @@ fn main() {
         respawn_minigame: args.respawn_minigame,
         bots: args.bots,
         bot_jump: args.bot_jump,
+        bot_radar: match args.bot_radar.as_str() {
+            "admins" => tabg_game::BotRadar::Admins,
+            "everyone" => tabg_game::BotRadar::Everyone,
+            _ => tabg_game::BotRadar::Off,
+        },
         spawn_points: vec![SpawnPoint {
             position: FALLBACK_SPAWN,
             rotation: 0.0,

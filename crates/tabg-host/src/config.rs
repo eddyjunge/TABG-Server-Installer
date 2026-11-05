@@ -15,6 +15,16 @@ pub enum NetMode {
     Direct,
 }
 
+/// Who sees the bots on the admin-radar client mod.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BotRadar {
+    #[default]
+    Off,
+    Admins,
+    Everyone,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Teams {
@@ -148,6 +158,8 @@ pub struct Game {
     pub respawn_minigame: bool,
     /// Bots that join the island's matches to fill them up.
     pub bots: u8,
+    /// Show the bots on the admin-radar client mod: off, admins, everyone.
+    pub bot_radar: BotRadar,
 }
 
 impl Default for Game {
@@ -175,6 +187,7 @@ impl Default for Game {
             spell_drops: true,
             respawn_minigame: false,
             bots: 0,
+            bot_radar: BotRadar::Off,
         }
     }
 }
@@ -513,6 +526,11 @@ impl ServerToml {
         }
         s.respawn_minigame = g.respawn_minigame;
         s.bots = g.bots;
+        s.bot_radar = match g.bot_radar {
+            BotRadar::Off => tabg_game::BotRadar::Off,
+            BotRadar::Admins => tabg_game::BotRadar::Admins,
+            BotRadar::Everyone => tabg_game::BotRadar::Everyone,
+        };
         if g.map != Map::Island {
             // Mod maps: Test mode at the map's own spawns; the island's loot and cars don't apply.
             s.game_mode = 2;

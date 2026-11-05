@@ -27,6 +27,15 @@ pub enum TestMap {
     DevTest,
 }
 
+/// Who sees the bots on the AdminRadar client mod's radar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BotRadar {
+    #[default]
+    Off,
+    Admins,
+    Everyone,
+}
+
 /// Bomb map data and round rules (official `BombGameMode`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct BombRules {
@@ -108,6 +117,8 @@ pub struct RoomSettings {
     pub bots: u8,
     /// Every bot jumps at this fraction of the flight (testing); random when `None`.
     pub bot_jump: Option<f32>,
+    /// Who sees the bots (and what they're doing) on the radar client mod.
+    pub bot_radar: BotRadar,
     /// The island's walkability grid (from the dumper), for bots.
     pub nav: Option<std::sync::Arc<crate::nav::NavGrid>>,
     /// Bomb map data and rules (from a Bomb map dump); used when `game_mode` is Bomb.
@@ -174,6 +185,7 @@ impl Default for RoomSettings {
             respawn_minigame: false,
             bots: 0,
             bot_jump: None,
+            bot_radar: BotRadar::Off,
             nav: None,
             tick_rate: 30,
             seed: 0x7ab6,

@@ -342,6 +342,9 @@ impl Room {
             out.extend(self.bot_shoot(bot, target, pos, d, now));
             return out;
         }
+        if let Some(b) = self.bots.get_mut(&bot) {
+            b.target = None;
+        }
         // In the water: swim to the nearest shore.
         if nav.height(me[0], me[2]).is_none() {
             out.extend(self.bot_swim(bot, step, nav));
@@ -530,6 +533,34 @@ impl Room {
         out
     }
 
+    /// What a bot is up to, for the radar: state, where it's walking, whom it's fighting, and
+    /// its gun.
+    pub(super) fn bot_view(&self, bot: u8) -> Option<BotView> {
+        let (b, p) = (self.bots.get(&bot)?, self.players.get(&bot)?);
+        let swimming = self
+            .settings
+            .nav
+            .as_ref()
+            .is_some_and(|n| n.height(p.position[0], p.position[2]).is_none());
+        let state = if !p.dropped {
+            BotState::Plane
+        } else if !p.landed {
+            BotState::Falling
+        } else if b.target.is_some() {
+            BotState::Fighting
+        } else if swimming {
+            BotState::Swimming
+        } else {
+            BotState::Walking
+        };
+        Some(BotView {
+            state,
+            goal: b.path.last().copied(),
+            target: b.target,
+            gun: b.gun.map(|g| g.item),
+        })
+    }
+
     /// Forget bots that left (they are removed with the room's players on reset).
     pub(super) fn forget_bot(&mut self, peer: u8) {
         self.bots.remove(&peer);
@@ -553,6 +584,23 @@ fn look_rotation(dir: [f32; 3]) -> [f32; 4] {
     let (sp, cp) = (pitch * 0.5).sin_cos();
     // yaw about Y, then pitch about X
     [cy * sp, sy * cp, -sy * sp, cy * cp]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(super) enum BotState {
+    Plane = 0,
+    Falling = 1,
+    Walking = 2,
+    Fighting = 3,
+    Swimming = 4,
+}
+
+pub(super) struct BotView {
+    pub state: BotState,
+    pub goal: Option<[f32; 3]>,
+    pub target: Option<u8>,
+    pub gun: Option<i32>,
 }
 
 pub(super) type Brains = BTreeMap<u8, Brain>;

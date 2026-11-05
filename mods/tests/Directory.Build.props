@@ -6,6 +6,7 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <TabgClientDir Condition="'$(TabgClientDir)' == ''">$(TABG_CLIENT_DIR)</TabgClientDir>
     <TabgSharedDir>$(MSBuildThisFileDirectory)../shared</TabgSharedDir>
   </PropertyGroup>
 </Project>

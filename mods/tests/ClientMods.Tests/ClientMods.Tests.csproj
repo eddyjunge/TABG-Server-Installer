@@ -9,5 +9,12 @@
   <ItemGroup>
     <Compile Include="$(TabgSharedDir)/CustomGameSkins.Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
     <ProjectReference Include="../../src/ProximityChat.Client/ProximityChat.Client.csproj" />
+    <ProjectReference Include="../../src/AdminRadar.Client/AdminRadar.Client.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The radar's messages carry Unity vectors (plain structs, no engine needed). -->
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(TabgClientDir)/TotallyAccurateBattlegrounds_Data/Managed/UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
   </ItemGroup>
 </Project>

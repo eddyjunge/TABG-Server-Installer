@@ -47,6 +47,7 @@ mod console;
 mod extras;
 mod inventory;
 mod maps;
+mod radar;
 mod skins;
 mod voice;
 pub use console::{PlayerInfo, RoomEvent};
@@ -213,6 +214,9 @@ pub struct Room {
     match_started_at: f32,
     /// Peers whose CustomGameSkins hello was accepted.
     skins_authorized: Vec<u8>,
+    /// Peers whose radar mod said hello.
+    radar_watchers: Vec<u8>,
+    next_radar_at: f32,
     /// Bomb mode round state.
     bomb: Option<bomb::BombState>,
     /// Soul loot network id → whose soul it is.
@@ -248,6 +252,8 @@ impl Room {
             events: Vec::new(),
             match_started_at: 0.0,
             skins_authorized: Vec::new(),
+            radar_watchers: Vec::new(),
+            next_radar_at: 0.0,
             bomb: None,
             souls: BTreeMap::new(),
             drops: Vec::new(),
@@ -323,6 +329,7 @@ impl Room {
     pub fn disconnect(&mut self, peer: u8) -> Vec<Outgoing> {
         self.pending.retain(|&p| p != peer);
         self.skins_authorized.retain(|&p| p != peer);
+        self.radar_watchers.retain(|&p| p != peer);
         self.eject(peer);
         // Leaving mid-match drops your loot, like dying (official `PlayerLeaveCommand`).
         let mut dropped = Vec::new();
@@ -358,6 +365,9 @@ impl Room {
         }
         if packet.code == skins::SKINS {
             return self.skins(peer, &packet.payload);
+        }
+        if packet.code == radar::RADAR {
+            return self.radar_hello(peer, &packet.payload);
         }
         if matches!(packet.code, maps::RANGE | maps::DEV_TEST) {
             return self.test_map(peer, packet.code, &packet.payload);
@@ -2100,6 +2110,7 @@ impl Room {
         self.last_now = Some(now);
         let mut out = self.tick_match(now, dt);
         out.extend(self.tick_bots(now, dt));
+        out.extend(self.tick_radar(now));
         out.extend(self.tick_movement(now));
         out
     }
@@ -4145,6 +4156,64 @@ mod tests {
             "and hit"
         );
         assert!(room.players[&0].health < 100.0 || !room.players[&0].alive);
+    }
+
+    #[test]
+    fn the_radar_shows_bots_to_those_allowed() {
+        let hello = Packet {
+            code: 241,
+            payload: b"ARDR\x02\x01".to_vec(),
+        };
+        let radar = |out: &[Outgoing]| -> Vec<Outgoing> {
+            out.iter()
+                .filter(|o| o.packet.code == 241)
+                .cloned()
+                .collect()
+        };
+        // Off by default: denied.
+        let mut room = Room::new(RoomSettings {
+            bots: 1,
+            nav: Some(flat_island()),
+            ..Default::default()
+        });
+        let out = room.handle(0, &hello);
+        assert_eq!(out[0].packet.payload, b"ARDR\x02\x04\x01");
+        // Admins only: a non-admin is denied once in, an admin gets snapshots.
+        let mut room = Room::new(RoomSettings {
+            bots: 2,
+            nav: Some(flat_island()),
+            bot_radar: crate::settings::BotRadar::Admins,
+            admins: vec!["boss".into()],
+            players_to_start: 5,
+            ..Default::default()
+        });
+        join(&mut room, 0, "boss");
+        enter(&mut room, 0);
+        join(&mut room, 1, "guest");
+        enter(&mut room, 1);
+        assert_eq!(room.handle(0, &hello)[0].packet.payload, b"ARDR\x02\x02");
+        assert_eq!(
+            room.handle(1, &hello)[0].packet.payload,
+            b"ARDR\x02\x04\x02"
+        );
+        let out = radar(&room.tick(0.1));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].to, Recipients::Many(vec![0]), "only the admin");
+        let snap = &out[0].packet.payload;
+        assert_eq!(&snap[..6], b"ARDR\x02\x03");
+        assert_eq!(snap[6], 2, "two bots, no humans");
+        assert!(room.is_bot(snap[7]));
+        assert!(radar(&room.tick(0.2)).is_empty(), "four times a second");
+        assert_eq!(radar(&room.tick(0.4)).len(), 1);
+        // Everyone, after a hot reload: the guest gets it too, without saying hello again.
+        let mut settings = room.settings.clone();
+        settings.bot_radar = crate::settings::BotRadar::Everyone;
+        room.apply_settings(settings);
+        let out = radar(&room.tick(0.7));
+        assert_eq!(out[0].to, Recipients::Many(vec![0, 1]));
+        room.disconnect(0);
+        room.disconnect(1);
+        assert!(radar(&room.tick(1.0)).is_empty());
     }
 
     #[test]

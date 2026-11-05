@@ -10,7 +10,7 @@ use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use tabg_host::apply::{self, Applied, ApplyError};
-use tabg_host::config::{GameMode, Map, NetMode, Teams};
+use tabg_host::config::{BotRadar, GameMode, Map, NetMode, Teams};
 use tabg_host::supervisor::{HostStatus, LogLine, RunState};
 use tabg_host::{ServerToml, backup, presets};
 
@@ -397,6 +397,14 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                     (field("Voice range (m)", "voice_range", g.voice_range, "For friends with the ProximityChat mod; 0: off."))
                     (check("Allow any outfit (custom-game-skins mod)", "skins", g.skins))
                     (field("Bots", "bots", g.bots, "Fill island matches with bots (they count towards players to start)."))
+                    div {
+                        label { "Bot radar (admin-radar mod)" }
+                        select name="bot_radar" {
+                            option value="off" selected[g.bot_radar == BotRadar::Off] { "Off" }
+                            option value="admins" selected[g.bot_radar == BotRadar::Admins] { "Admins" }
+                            option value="everyone" selected[g.bot_radar == BotRadar::Everyone] { "Everyone" }
+                        }
+                    }
                     (check("Spell drops (blessings from the sky)", "spell_drops", g.spell_drops))
                     (check("Respawn minigame (boss fight after an early death)", "respawn_minigame", g.respawn_minigame))
                     }
@@ -695,6 +703,11 @@ fn settings_from_form(
     c.game.skins = f.contains_key("skins");
     c.game.spell_drops = f.contains_key("spell_drops");
     parse(f, "bots", &mut c.game.bots)?;
+    c.game.bot_radar = match f.get("bot_radar").map(String::as_str) {
+        Some("admins") => BotRadar::Admins,
+        Some("everyone") => BotRadar::Everyone,
+        _ => BotRadar::Off,
+    };
     c.game.respawn_minigame = f.contains_key("respawn_minigame");
     c.rules.respawn = f.contains_key("respawn");
     parse(f, "respawn_delay", &mut c.rules.respawn_delay)?;
