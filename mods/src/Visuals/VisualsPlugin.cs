@@ -34,6 +34,7 @@ namespace TabgInstaller.Visuals
         internal ConfigEntry<float> Sharpen;
         internal ConfigEntry<float> VolumetricLight;
         internal ConfigEntry<int> VolumetricSteps;
+        internal ConfigEntry<bool> Water;
         internal ConfigEntry<bool> Clouds;
         internal ConfigEntry<float> CloudCoverage;
         internal ConfigEntry<float> CloudHeight;
@@ -75,6 +76,7 @@ namespace TabgInstaller.Visuals
             VolumetricLight = Config.Bind("Atmosphere", "VolumetricLight", 0.4f, Range("Sunlight in the air, shadowed by trees and buildings (0 = off)", 0f, 2f));
             VolumetricSteps = Config.Bind("Atmosphere", "VolumetricSteps", 24, new ConfigDescription(
                 "Samples per pixel for volumetric light (quality vs speed)", new AcceptableValueRange<int>(8, 48)));
+            Water = Config.Bind("Water", "Enabled", true, "Better sea: wave foam on, richer colour, more sun glowing through the waves (tunes TABG's Crest ocean)");
             Clouds = Config.Bind("Clouds", "Enabled", true, "Soft 3D cumulus clouds over the painted sky, lit by the sun");
             CloudCoverage = Config.Bind("Clouds", "Coverage", 0.45f, Range("How much of the sky the clouds cover", 0.05f, 0.95f));
             CloudHeight = Config.Bind("Clouds", "Height", 650f, Range("Cloud base height (m)", 200f, 2000f));
@@ -105,6 +107,7 @@ namespace TabgInstaller.Visuals
             ModSettings.ModSettingsUI.Register(cat, "AO Strength", "Ambient occlusion strength", AOStrength);
             ModSettings.ModSettingsUI.Register(cat, "Volumetric Light", "Sunlight in the air, shadowed by the world", VolumetricLight);
             ModSettings.ModSettingsUI.Register(cat, "Volumetric Quality", "Samples per pixel", VolumetricSteps);
+            ModSettings.ModSettingsUI.Register(cat, "Better Water", "Foam, richer colour, sun through waves", Water);
             ModSettings.ModSettingsUI.Register(cat, "Clouds", "Soft 3D clouds over the sky", Clouds);
             ModSettings.ModSettingsUI.Register(cat, "Cloud Coverage", "How much sky the clouds cover", CloudCoverage);
             ModSettings.ModSettingsUI.Register(cat, "Cloud Height", "Cloud base height (m)", CloudHeight);
@@ -131,7 +134,8 @@ namespace TabgInstaller.Visuals
             BetterShadows.SettingChanged += (_, __) => Quality.Apply();
             BetterAO.SettingChanged += (_, __) => Quality.Apply();
             AOStrength.SettingChanged += (_, __) => Quality.Apply();
-            Enabled.SettingChanged += (_, __) => Quality.Apply();
+            Enabled.SettingChanged += (_, __) => { Quality.Apply(); Ocean.Apply(Enabled.Value && Water.Value); };
+            Water.SettingChanged += (_, __) => Ocean.Apply(Enabled.Value && Water.Value);
         }
 
         private void LoadMaterials()
@@ -186,6 +190,7 @@ namespace TabgInstaller.Visuals
             // The player camera is created per match; attach to whatever the main camera is now.
             if (Material == null || Time.unscaledTime < _nextCameraCheck) return;
             _nextCameraCheck = Time.unscaledTime + 1f;
+            Ocean.Apply(Enabled.Value && Water.Value);
             var cam = Camera.main;
             if (cam != null && cam.GetComponent<StylizeEffect>() == null)
             {
