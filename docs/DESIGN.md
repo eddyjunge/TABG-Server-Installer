@@ -170,6 +170,7 @@ Overview (status, join code, players, quick actions) · Console · Players (kick
   - No DLLs in git (`.gitignore` blocks them).
   - Deterministic builds with `PathMap`, and no post-build copies into tracked folders.
   - `mods/tests/Vehicles.Tests` is now xUnit, one fact per rule area (20). It needs no game files.
+- **Reading the game:** `scripts/decompile.sh [--all] [client|server|both]` decompiles every game assembly of your own client and server installs (Assembly-CSharp, firstpass, Sirenix, EasyRoads, PlayFab, …; Unity engine and framework DLLs only with `--all`) into git-ignored `target/decompiled/{client,server}/`, as ilspy C# projects, in about 40 s. Use it to find what to Harmony-patch. It is Landfall's code: it stays local and is never committed, quoted at length or shipped.
 - **Release:** `scripts/release-mods` builds Release, packs each mod, writes `catalog.json` (id, version, sha256, size, dependencies) and uploads to a GitHub Release. tabg pins catalog versions.
 
 ## 8. Repo layout
