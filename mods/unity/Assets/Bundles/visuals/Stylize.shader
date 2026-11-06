@@ -189,7 +189,7 @@ Shader "Hidden/TabgVisuals/Stylize"
                 if (sky && _Atmos.x > 0)
                 {
                     float t = smoothstep(0.3, 1.0, i.uv.y);
-                    float3 tint = lerp(float3(1.03, 0.98, 0.92), float3(0.45, 0.65, 1.12), t);
+                    float3 tint = lerp(float3(1.02, 0.99, 0.95), float3(0.62, 0.76, 1.06), t);
                     float sunCore = exp(-length(SunDelta(i.uv)) * 10.0) * _Sun.z;
                     float w = (1.0 - smoothstep(0.93, 0.99, Luminance(c))) * (1.0 - saturate(sunCore * 2.0));
                     c = lerp(c, c * tint, w * _Atmos.x);

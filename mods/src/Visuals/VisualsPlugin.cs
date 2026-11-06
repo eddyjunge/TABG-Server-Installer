@@ -11,7 +11,7 @@ namespace TabgInstaller.Visuals
     /// outlines. Purely client-side and cosmetic; does not touch shadows or quality settings (that
     /// is PerformanceClient's job).
     /// </summary>
-    [BepInPlugin("tabginstaller.visuals", "TABG Visuals", "1.1.0")]
+    [BepInPlugin("tabginstaller.visuals", "TABG Visuals", "1.1.1")]
     [BepInDependency("tabginstaller.modsettings", BepInDependency.DependencyFlags.HardDependency)]
     public class VisualsPlugin : BaseUnityPlugin
     {
@@ -50,14 +50,14 @@ namespace TabgInstaller.Visuals
             Enabled = Config.Bind("General", "Enabled", true, "Apply the visuals effect");
             ToggleKey = Config.Bind("General", "ToggleKey", KeyCode.F8, "Key to switch the effect on/off (to compare)");
 
-            Warmth = Config.Bind("Grade", "Warmth", 0.8f, Range("Warm sunlit highlights, cool blue shadows", 0f, 1.5f));
-            Saturation = Config.Bind("Grade", "Saturation", 0.25f, Range("Richer colours everywhere", -0.5f, 0.6f));
-            Vibrance = Config.Bind("Grade", "Vibrance", 0.25f, Range("Lifts dull colours more than bright ones", -0.5f, 0.8f));
-            Contrast = Config.Bind("Grade", "Contrast", 0.35f, Range("Soft S-curve: deeper shadows, brighter highlights", 0f, 1f));
+            Warmth = Config.Bind("Grade", "Warmth", 0.5f, Range("Warm sunlit highlights, cool blue shadows", 0f, 1.5f));
+            Saturation = Config.Bind("Grade", "Saturation", 0f, Range("Richer colours everywhere", -0.5f, 0.6f));
+            Vibrance = Config.Bind("Grade", "Vibrance", 0.1f, Range("Lifts dull colours more than bright ones", -0.5f, 0.8f));
+            Contrast = Config.Bind("Grade", "Contrast", 0.25f, Range("Soft S-curve: deeper shadows, brighter highlights", 0f, 1f));
             Haze = Config.Bind("Atmosphere", "Haze", 0.45f, Range("Blue-lavender haze over distant terrain, warm toward the sun", 0f, 1f));
             HazeStart = Config.Bind("Atmosphere", "HazeStart", 25f, Range("Distance (m) where the haze begins", 0f, 300f));
             HazeDistance = Config.Bind("Atmosphere", "HazeDistance", 450f, Range("How far (m) until the haze is two-thirds thick", 50f, 3000f));
-            SkyDepth = Config.Bind("Atmosphere", "SkyDepth", 0.85f, Range("Deeper blue sky overhead, light at the horizon", 0f, 1f));
+            SkyDepth = Config.Bind("Atmosphere", "SkyDepth", 0.45f, Range("Deeper blue sky overhead, light at the horizon", 0f, 1f));
             SunRays = Config.Bind("Atmosphere", "SunRays", 0.8f, Range("Light shafts and glow around the sun", 0f, 2f));
             Vignette = Config.Bind("Atmosphere", "Vignette", 0.25f, Range("Darker screen corners", 0f, 1f));
             Sharpen = Config.Bind("Detail", "Sharpen", 0.25f, Range("Contrast-adaptive sharpening (0 = off)", 0f, 1f));
