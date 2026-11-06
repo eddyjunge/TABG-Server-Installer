@@ -29,6 +29,9 @@ struct Args {
     /// Countdown length in seconds.
     #[arg(long, default_value_t = 20.0)]
     countdown: f32,
+    /// Time of day for lighting, 0..1 (0.05 morning, 0.2 midday, 0.95 evening).
+    #[arg(long, default_value_t = 0.25)]
+    time_of_day: f32,
     /// Player name with admin rights (repeatable; `*` = everyone). Admins can force-start and
     /// use chat commands: /start, /give <item> [qty], /heal, /kick <name>.
     #[arg(long = "admin")]
@@ -148,6 +151,7 @@ fn main() {
         password: args.password,
         players_to_start: args.players_to_start,
         countdown: args.countdown,
+        time_of_day: args.time_of_day.clamp(0.0, 1.0),
         seed,
         admins: args.admins.clone(),
         loadout,

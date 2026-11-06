@@ -191,7 +191,7 @@ All of them are optional. Friends get them through the share code, never by hand
 | ModSettings | `mod-settings` | In-game settings for the other mods | F9 |
 | PerformanceClient | `performance-client` | FPS, culling, streaming and network optimizations, with a frame-time overlay | F10 |
 | PopupBlocker | `popup-blocker` | Hides the anti-cheat popups in the modded copy | |
-| Visuals | `visuals` | Soft ink outlines, contrast-adaptive sharpening and a little vibrance, on top of TABG's own look; every part has a slider | F8 |
+| Visuals | `visuals` | Warm cinematic look on top of TABG's own: golden highlights and cool shadows, richer colours, deep blue sky, distant haze, sun rays and glow, vignette, sharpening and optional outlines; every part has a slider | F8 |
 
 ## Proximity Voice Chat
 
