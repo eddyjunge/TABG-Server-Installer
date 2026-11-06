@@ -11,6 +11,7 @@
 //    close, and only where there is visible contrast (so lines fade into fog like objects do).
 //  - Sharpen: contrast-adaptive sharpening after AMD FidelityFX CAS (MIT).
 //  - Volumetric sunlight from Volumetric.shader (shadowed light shafts), added in the sun colour.
+//  - Procedural cumulus clouds from Clouds.shader over the sky.
 //  - Vignette.
 Shader "Hidden/TabgVisuals/Stylize"
 {
@@ -19,6 +20,7 @@ Shader "Hidden/TabgVisuals/Stylize"
         _MainTex ("Source", 2D) = "white" {}
         _RaysTex ("Rays", 2D) = "black" {}
         _VolTex ("Volumetric", 2D) = "black" {}
+        _CloudTex ("Clouds", 2D) = "black" {}
     }
 
     CGINCLUDE
@@ -28,6 +30,8 @@ Shader "Hidden/TabgVisuals/Stylize"
     float4 _MainTex_TexelSize;
     sampler2D _RaysTex;
     sampler2D _VolTex;      // volumetric sunlight (Volumetric.shader), R = scattered light
+    sampler2D _CloudTex;    // procedural clouds (Clouds.shader): rgb premultiplied, a coverage
+    float4 _Clouds;         // x: 1 = clouds on
     float4 _Vol;            // x: strength (0 = off)
     UNITY_DECLARE_DEPTH_TEXTURE(_CameraDepthTexture);
 
@@ -153,6 +157,7 @@ Shader "Hidden/TabgVisuals/Stylize"
 
             fixed4 frag(v2f_img i) : SV_Target
             {
+                if (_Tone.z > 6.5) { float4 cl = tex2D(_CloudTex, i.uv); return float4(cl.rgb + (1 - cl.a) * float3(0.2, 0.3, 0.5), 1); }
                 if (_Tone.z > 5.5) return float4(tex2D(_VolTex, i.uv).rrr, 1);
                 if (_Tone.z > 4.5)
                 {
@@ -205,6 +210,13 @@ Shader "Hidden/TabgVisuals/Stylize"
                 }
 
                 if (_Ink.x > 0) c = lerp(c, c * _InkShape.x, InkMask(i.uv));
+
+                // Procedural clouds, only where the sky shows (terrain always stays in front).
+                if (sky && _Clouds.x > 0)
+                {
+                    float4 cl = tex2D(_CloudTex, i.uv);
+                    c = c * (1.0 - cl.a) + cl.rgb;
+                }
 
                 // Sun rays and a soft glow around the sun, screen-blended so nothing clips hard.
                 float3 light = tex2D(_RaysTex, i.uv).rgb * _Sun.w * 0.6 * _SunColor.rgb;

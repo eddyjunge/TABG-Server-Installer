@@ -34,6 +34,10 @@ namespace TabgInstaller.Visuals
         internal ConfigEntry<float> Sharpen;
         internal ConfigEntry<float> VolumetricLight;
         internal ConfigEntry<int> VolumetricSteps;
+        internal ConfigEntry<bool> Clouds;
+        internal ConfigEntry<float> CloudCoverage;
+        internal ConfigEntry<float> CloudHeight;
+        internal ConfigEntry<int> CloudSteps;
         internal ConfigEntry<bool> BetterShadows;
         internal ConfigEntry<bool> BetterAO;
         internal ConfigEntry<float> AOStrength;
@@ -47,6 +51,7 @@ namespace TabgInstaller.Visuals
 
         internal Material Material;
         internal Material VolumetricMaterial;
+        internal Material CloudMaterial;
         private float _nextCameraCheck;
 
         private static ConfigDescription Range(string text, float min, float max) =>
@@ -70,6 +75,11 @@ namespace TabgInstaller.Visuals
             VolumetricLight = Config.Bind("Atmosphere", "VolumetricLight", 0.4f, Range("Sunlight in the air, shadowed by trees and buildings (0 = off)", 0f, 2f));
             VolumetricSteps = Config.Bind("Atmosphere", "VolumetricSteps", 24, new ConfigDescription(
                 "Samples per pixel for volumetric light (quality vs speed)", new AcceptableValueRange<int>(8, 48)));
+            Clouds = Config.Bind("Clouds", "Enabled", true, "Soft 3D cumulus clouds over the painted sky, lit by the sun");
+            CloudCoverage = Config.Bind("Clouds", "Coverage", 0.45f, Range("How much of the sky the clouds cover", 0.05f, 0.95f));
+            CloudHeight = Config.Bind("Clouds", "Height", 650f, Range("Cloud base height (m)", 200f, 2000f));
+            CloudSteps = Config.Bind("Clouds", "Steps", 24, new ConfigDescription(
+                "Samples per pixel for clouds (quality vs speed)", new AcceptableValueRange<int>(8, 48)));
             Vignette = Config.Bind("Atmosphere", "Vignette", 0.25f, Range("Darker screen corners", 0f, 1f));
             Sharpen = Config.Bind("Detail", "Sharpen", 0.25f, Range("Contrast-adaptive sharpening (0 = off)", 0f, 1f));
             BetterShadows = Config.Bind("Quality", "BetterShadows", true,
@@ -84,8 +94,8 @@ namespace TabgInstaller.Visuals
             InkFadeStart = Config.Bind("Ink", "FadeStart", 40f, Range("Distance (m) where lines start to fade", 0f, 500f));
             InkFadeEnd = Config.Bind("Ink", "FadeEnd", 150f, Range("Distance (m) where lines are gone", 1f, 1000f));
             DebugView = Config.Bind("Debug", "View", 0, new ConfigDescription(
-                "0 normal, 1 outline mask, 2 depth, 3 passthrough, 4 sun rays, 5 distance (red = sky), 6 volumetric light",
-                new AcceptableValueRange<int>(0, 6)));
+                "0 normal, 1 outline mask, 2 depth, 3 passthrough, 4 sun rays, 5 distance (red = sky), 6 volumetric light, 7 clouds",
+                new AcceptableValueRange<int>(0, 7)));
 
             const string cat = "Visuals";
             ModSettings.ModSettingsUI.Register(cat, "Enabled", "Apply the visuals effect", Enabled);
@@ -95,6 +105,10 @@ namespace TabgInstaller.Visuals
             ModSettings.ModSettingsUI.Register(cat, "AO Strength", "Ambient occlusion strength", AOStrength);
             ModSettings.ModSettingsUI.Register(cat, "Volumetric Light", "Sunlight in the air, shadowed by the world", VolumetricLight);
             ModSettings.ModSettingsUI.Register(cat, "Volumetric Quality", "Samples per pixel", VolumetricSteps);
+            ModSettings.ModSettingsUI.Register(cat, "Clouds", "Soft 3D clouds over the sky", Clouds);
+            ModSettings.ModSettingsUI.Register(cat, "Cloud Coverage", "How much sky the clouds cover", CloudCoverage);
+            ModSettings.ModSettingsUI.Register(cat, "Cloud Height", "Cloud base height (m)", CloudHeight);
+            ModSettings.ModSettingsUI.Register(cat, "Cloud Quality", "Samples per pixel", CloudSteps);
             ModSettings.ModSettingsUI.Register(cat, "Warmth", "Warm highlights, cool shadows", Warmth);
             ModSettings.ModSettingsUI.Register(cat, "Saturation", "Richer colours", Saturation);
             ModSettings.ModSettingsUI.Register(cat, "Vibrance", "Lifts dull colours", Vibrance);
@@ -145,6 +159,7 @@ namespace TabgInstaller.Visuals
                 }
                 Material = MaterialFrom(bundle, "Assets/Bundles/visuals/Stylize.shader");
                 VolumetricMaterial = MaterialFrom(bundle, "Assets/Bundles/visuals/Volumetric.shader");
+                CloudMaterial = MaterialFrom(bundle, "Assets/Bundles/visuals/Clouds.shader");
                 bundle.Unload(false);
             }
         }

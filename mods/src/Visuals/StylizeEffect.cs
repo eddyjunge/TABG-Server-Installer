@@ -31,6 +31,12 @@ namespace TabgInstaller.Visuals
         private static readonly int VolParamsId = Shader.PropertyToID("_VolParams");
         private static readonly int BlurDirId = Shader.PropertyToID("_BlurDir");
         private static readonly int ShadowMapId = Shader.PropertyToID("_TabgShadowMap");
+        private static readonly int CloudsId = Shader.PropertyToID("_Clouds");
+        private static readonly int CloudTexId = Shader.PropertyToID("_CloudTex");
+        private static readonly int CloudLayerId = Shader.PropertyToID("_CloudLayer");
+        private static readonly int CloudShapeId = Shader.PropertyToID("_CloudShape");
+        private static readonly int AmbientTopId = Shader.PropertyToID("_AmbientTop");
+        private static readonly int AmbientBottomId = Shader.PropertyToID("_AmbientBottom");
 
         // Distant haze: a cool, slightly lavender sky blue.
         private static readonly Color HazeColor = new Color(0.70f, 0.77f, 0.93f);
@@ -158,6 +164,36 @@ namespace TabgInstaller.Visuals
             _cmdLight = null;
         }
 
+        // ---------------------------------------------------------------- clouds
+
+        private RenderTexture RenderClouds(VisualsPlugin p, Light sun, Color sunColor, int w, int h)
+        {
+            var cm = p.CloudMaterial;
+            if (cm == null || !p.Clouds.Value || sun == null) return null;
+            _cam.CalculateFrustumCorners(new Rect(0, 0, 1, 1), 1f, Camera.MonoOrStereoscopicEye.Mono, _corners);
+            var t = _cam.transform;
+            var rays = new Matrix4x4();
+            rays.SetRow(0, t.TransformVector(_corners[0]));
+            rays.SetRow(1, t.TransformVector(_corners[3]));
+            rays.SetRow(2, t.TransformVector(_corners[1]));
+            rays.SetRow(3, t.TransformVector(_corners[2]));
+            cm.SetMatrix(FrustumRaysId, rays);
+            cm.SetVector(CamPosId, t.position);
+            cm.SetVector(SunDirId, -sun.transform.forward);
+            cm.SetColor(SunColorId, sunColor * 1.2f);
+            // Ambient: the game's own sky ambience (changes with time of day), plus a cool shade.
+            Color sky = RenderSettings.ambientSkyColor;
+            cm.SetColor(AmbientTopId, Color.Lerp(new Color(0.78f, 0.84f, 0.96f), sky, 0.3f) * 0.85f);
+            cm.SetColor(AmbientBottomId, Color.Lerp(new Color(0.58f, 0.6f, 0.74f), sky, 0.2f) * 0.75f);
+            float baseH = p.CloudHeight.Value;
+            cm.SetVector(CloudLayerId, new Vector4(baseH, baseH + 550f, p.CloudCoverage.Value, 1f));
+            float wind = Time.time * 6f;
+            cm.SetVector(CloudShapeId, new Vector4(wind, wind * 0.4f, 900f, p.CloudSteps.Value));
+            var rt = RenderTexture.GetTemporary(Mathf.Max(1, w), Mathf.Max(1, h), 0, RenderTextureFormat.ARGBHalf);
+            Graphics.Blit(Texture2D.blackTexture, rt, cm, 0);
+            return rt;
+        }
+
         // ---------------------------------------------------------------- image effect
 
         private void OnRenderImage(RenderTexture src, RenderTexture dst)
@@ -227,8 +263,13 @@ namespace TabgInstaller.Visuals
                 m.SetTexture(RaysTexId, Texture2D.blackTexture);
             }
 
+            RenderTexture clouds = RenderClouds(p, sun, sunColor, src.width / 2, src.height / 2);
+            m.SetVector(CloudsId, new Vector4(clouds != null ? 1f : 0f, 0f, 0f, 0f));
+            m.SetTexture(CloudTexId, clouds != null ? (Texture)clouds : Texture2D.blackTexture);
+
             Graphics.Blit(src, dst, m, 0);
             if (rays != null) RenderTexture.ReleaseTemporary(rays);
+            if (clouds != null) RenderTexture.ReleaseTemporary(clouds);
         }
     }
 }
