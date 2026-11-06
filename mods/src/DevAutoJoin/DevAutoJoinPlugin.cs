@@ -24,6 +24,10 @@ namespace Tabg.DevAutoJoin
     ///   TABG_AUTOJOIN_CHAT   "text@seconds" (after joining) to send a chat line, e.g. "/give 131 5@20"
     ///   TABG_AUTOJOIN_HEAL   item id to heal with (once), as soon as the local player is hurt, e.g. 131
     ///   TABG_AUTOJOIN_DROP   "item:count@seconds" (after joining) to drop from the inventory, e.g. "132:1@75"
+    ///   TABG_AUTOJOIN_BENCH  "plugin.guid/Section/Key=v1,v2@start,seconds,rounds": from `start` seconds after
+    ///                        joining, alternate the setting through the values `rounds` times, measuring
+    ///                        frame times for `seconds` each (uncapped: vsync off, no frame limit); logs
+    ///                        "[bench]" lines with average FPS, frame time and 1 % lows per value
     ///   TABG_AUTOJOIN_COMPARE "plugin.guid/Section/Key": every screenshot is taken once per value, a few
     ///                        frames apart: off/on for a bool, or "...Key=v1,v2" (files -off/-on or -v1/-v2)
     ///
@@ -166,6 +170,78 @@ namespace Tabg.DevAutoJoin
         }
 
         /// Heal and drop through the client's own inventory code, like a player would.
+        private bool _benchStarted;
+
+        private static BepInEx.Configuration.ConfigEntryBase FindSetting(string path)
+        {
+            string[] parts = path.Split('/');
+            if (parts.Length == 3 && BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(parts[0], out var info) && info.Instance != null)
+            {
+                var def = new BepInEx.Configuration.ConfigDefinition(parts[1], parts[2]);
+                if (info.Instance.Config.ContainsKey(def)) return info.Instance.Config[def];
+            }
+            return null;
+        }
+
+        private System.Collections.IEnumerator Bench(string setting, float seconds, int rounds)
+        {
+            string[] kv = setting.Split(new[] { '=' }, 2);
+            var entry = FindSetting(kv[0]);
+            if (entry == null)
+            {
+                Logger.LogWarning($"bench: no setting {kv[0]}");
+                yield break;
+            }
+            string[] values = kv.Length > 1 ? kv[1].Split(',') : new[] { "false", "true" };
+            object original = entry.BoxedValue;
+            int vsync = QualitySettings.vSyncCount, target = Application.targetFrameRate;
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = -1;
+            Logger.LogInfo($"[bench] {kv[0]} values {string.Join(",", values)}, {rounds} rounds x {seconds}s, " +
+                $"{Screen.width}x{Screen.height}, {SystemInfo.graphicsDeviceName}, vsync was {vsync}, target was {target}");
+            var times = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<float>>();
+            foreach (string v in values) times[v] = new System.Collections.Generic.List<float>();
+            for (int r = 0; r < rounds; r++)
+            {
+                foreach (string v in values)
+                {
+                    entry.SetSerializedValue(v);
+                    float settle = Time.realtimeSinceStartup + 1f;
+                    while (Time.realtimeSinceStartup < settle) yield return null;
+                    long ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    Logger.LogInfo($"[bench] phase {v} {ms} {ms + (long)(seconds * 1000)}");
+                    float end = Time.realtimeSinceStartup + seconds;
+                    float last = Time.realtimeSinceStartup;
+                    while (Time.realtimeSinceStartup < end)
+                    {
+                        yield return null;
+                        float now = Time.realtimeSinceStartup;
+                        times[v].Add(now - last);
+                        last = now;
+                    }
+                }
+            }
+            entry.BoxedValue = original;
+            QualitySettings.vSyncCount = vsync;
+            Application.targetFrameRate = target;
+            foreach (string v in values)
+            {
+                var t = times[v];
+                t.Sort();
+                float sum = 0f;
+                foreach (float x in t) sum += x;
+                float avg = sum / Math.Max(1, t.Count);
+                // 1 % low: average of the slowest 1 % of frames.
+                int n = Math.Max(1, t.Count / 100);
+                float slow = 0f;
+                for (int i = t.Count - n; i < t.Count; i++) slow += t[i];
+                slow /= n;
+                Logger.LogInfo(string.Format(CultureInfo.InvariantCulture,
+                    "[bench] {0}={1}: {2:0.0} fps avg ({3:0.00} ms), 1% low {4:0.0} fps ({5:0.00} ms), {6} frames",
+                    kv[0], v, 1f / avg, avg * 1000f, 1f / slow, slow * 1000f, t.Count));
+            }
+        }
+
         private System.Collections.IEnumerator CompareShots(int index, string setting)
         {
             // "guid/Section/Key" (bool: off then on) or "guid/Section/Key=v1,v2,..." (any type).
@@ -260,6 +336,24 @@ namespace Tabg.DevAutoJoin
 
             _sinceJoin += dt;
             TickJumpAndSeat(dt);
+            if (!_benchStarted)
+            {
+                string bench = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_BENCH");
+                if (!string.IsNullOrEmpty(bench))
+                {
+                    string[] at = bench.Split('@');
+                    string[] nums = at.Length > 1 ? at[1].Split(',') : new string[0];
+                    float start = nums.Length > 0 ? float.Parse(nums[0], CultureInfo.InvariantCulture) : 15f;
+                    if (_sinceJoin >= start)
+                    {
+                        _benchStarted = true;
+                        float secs = nums.Length > 1 ? float.Parse(nums[1], CultureInfo.InvariantCulture) : 4f;
+                        int rounds = nums.Length > 2 ? int.Parse(nums[2]) : 3;
+                        StartCoroutine(Bench(at[0], secs, rounds));
+                    }
+                }
+                else _benchStarted = true;
+            }
             if (_chatAt >= 0f && _sinceJoin >= _chatAt)
             {
                 _chatAt = -1f;
