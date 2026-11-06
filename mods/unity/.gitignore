@@ -1,0 +1,10 @@
+# Unity generates these
+/Library/
+/Temp/
+/Logs/
+/UserSettings/
+/obj/
+/*.csproj
+/*.sln
+/Assets/Editor/
+/Assets/Editor.meta

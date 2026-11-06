@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Dev tool: makes a client join a server by itself and reports what happens. Never shipped. -->
   <ItemGroup>
+    <GameRef Include="UnityEngine.ImageConversionModule" />
     <GameRef Include="UnityEngine.ScreenCaptureModule" />
   </ItemGroup>
 </Project>

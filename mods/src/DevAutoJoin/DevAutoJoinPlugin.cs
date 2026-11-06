@@ -24,6 +24,8 @@ namespace Tabg.DevAutoJoin
     ///   TABG_AUTOJOIN_CHAT   "text@seconds" (after joining) to send a chat line, e.g. "/give 131 5@20"
     ///   TABG_AUTOJOIN_HEAL   item id to heal with (once), as soon as the local player is hurt, e.g. 131
     ///   TABG_AUTOJOIN_DROP   "item:count@seconds" (after joining) to drop from the inventory, e.g. "132:1@75"
+    ///   TABG_AUTOJOIN_COMPARE "plugin.guid/Section/Key": every screenshot is taken once per value, a few
+    ///                        frames apart: off/on for a bool, or "...Key=v1,v2" (files -off/-on or -v1/-v2)
     ///
     /// Logs scene changes, every event the client receives, and the local player's position, and
     /// saves screenshots to BepInEx/autojoin-*.png.
@@ -164,6 +166,41 @@ namespace Tabg.DevAutoJoin
         }
 
         /// Heal and drop through the client's own inventory code, like a player would.
+        private System.Collections.IEnumerator CompareShots(int index, string setting)
+        {
+            // "guid/Section/Key" (bool: off then on) or "guid/Section/Key=v1,v2,..." (any type).
+            string[] kv = setting.Split(new[] { '=' }, 2);
+            string[] parts = kv[0].Split('/');
+            BepInEx.Configuration.ConfigEntryBase entry = null;
+            if (parts.Length == 3 && BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(parts[0], out var info) && info.Instance != null)
+            {
+                var def = new BepInEx.Configuration.ConfigDefinition(parts[1], parts[2]);
+                if (info.Instance.Config.ContainsKey(def)) entry = info.Instance.Config[def];
+            }
+            if (entry == null)
+            {
+                Logger.LogWarning($"compare: no setting {kv[0]}");
+                yield break;
+            }
+            string[] values = kv.Length > 1 ? kv[1].Split(',') : new[] { "false", "true" };
+            object original = entry.BoxedValue;
+            foreach (string v in values)
+            {
+                entry.SetSerializedValue(v);
+                for (int f = 0; f < 5; f++) yield return null;
+                // CaptureScreenshot(path) lands an unpredictable number of frames later under
+                // Proton, so grab this very frame synchronously instead.
+                yield return new WaitForEndOfFrame();
+                var tex = ScreenCapture.CaptureScreenshotAsTexture();
+                string label = v == "false" ? "off" : v == "true" ? "on" : v;
+                string path = Path.Combine(Paths.BepInExRootPath, $"autojoin-{index}-{label}.png");
+                File.WriteAllBytes(path, ImageConversion.EncodeToPNG(tex));
+                Destroy(tex);
+                Logger.LogInfo($"screenshot {path}");
+            }
+            entry.BoxedValue = original;
+        }
+
         private void TickInventory()
         {
             Player me = Player.localPlayer;
@@ -233,9 +270,17 @@ namespace Tabg.DevAutoJoin
             // -batchmode -nographics (the test script's default) has nothing to capture.
             if (!Application.isBatchMode && _shot < _shotTimes.Length && _sinceJoin >= _shotTimes[_shot])
             {
-                string path = Path.Combine(Paths.BepInExRootPath, $"autojoin-{_shot}.png");
-                ScreenCapture.CaptureScreenshot(path);
-                Logger.LogInfo($"screenshot {path}");
+                string compare = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_COMPARE");
+                if (!string.IsNullOrEmpty(compare))
+                {
+                    StartCoroutine(CompareShots(_shot, compare));
+                }
+                else
+                {
+                    string path = Path.Combine(Paths.BepInExRootPath, $"autojoin-{_shot}.png");
+                    ScreenCapture.CaptureScreenshot(path);
+                    Logger.LogInfo($"screenshot {path}");
+                }
                 _shot++;
             }
 

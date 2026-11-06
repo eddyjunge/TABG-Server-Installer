@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The editor-side build script, compiled with dotnet instead of by Unity: Unity 2021.3's own
+    script compiler (bee_backend) deadlocks on current glibc (2.44), and a precompiled DLL in
+    Assets/Editor/ skips it entirely. scripts/build-shaders.sh builds this and copies the DLL in.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>TabgMods.EditorTools</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <Deterministic>true</Deterministic>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <UnityManaged Condition="'$(UnityManaged)' == ''">$(HOME)/.local/share/tabg/tools/unity-2021.3.45f2/Editor/Data/Managed</UnityManaged>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="UnityEditor" HintPath="$(UnityManaged)/UnityEditor.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(UnityManaged)/UnityEngine.dll" Private="false" />
+  </ItemGroup>
+</Project>
