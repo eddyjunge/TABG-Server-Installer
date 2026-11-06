@@ -1,0 +1,403 @@
+diff --git a/USCSandbox/Processor/BlobManager.cs b/USCSandbox/Processor/BlobManager.cs
+index 673dc53..8cd0e8d 100644
+--- a/USCSandbox/Processor/BlobManager.cs
++++ b/USCSandbox/Processor/BlobManager.cs
+@@ -1,32 +1,36 @@
+-﻿using AssetRipper.Primitives;
++using AssetRipper.Primitives;
+ using AssetsTools.NET;
+ 
+ namespace USCSandbox.Processor
+ {
+     public class BlobManager
+     {
+-        private AssetsFileReader _reader;
++        private List<byte[]> _segments;
+         private UnityVersion _engVer;
+ 
+         public List<BlobEntry> Entries;
+ 
+-        public BlobManager(byte[] blob, UnityVersion engVer)
++        public BlobManager(List<byte[]> segments, UnityVersion engVer)
+         {
+-            _reader = new AssetsFileReader(new MemoryStream(blob));
++            _segments = segments;
+             _engVer = engVer;
+ 
+-            var count = _reader.ReadInt32();
++            var reader = new AssetsFileReader(new MemoryStream(segments[0]));
++            var count = reader.ReadInt32();
+             Entries = new List<BlobEntry>(count);
+             for (var i = 0; i < count; i++)
+             {
+-                Entries.Add(new BlobEntry(_reader, engVer));
++                Entries.Add(new BlobEntry(reader, engVer));
+             }
+         }
+ 
+         public byte[] GetRawEntry(int index)
+         {
+-            _reader.BaseStream.Position = Entries[index].Offset;
+-            return _reader.ReadBytes(Entries[index].Length);
++            var e = Entries[index];
++            var seg = _segments[e.Segment];
++            var bytes = new byte[e.Length];
++            Array.Copy(seg, e.Offset, bytes, 0, e.Length);
++            return bytes;
+         }
+ 
+         public ShaderParams GetShaderParams(int index)
+diff --git a/USCSandbox/Processor/ShaderProcessor.cs b/USCSandbox/Processor/ShaderProcessor.cs
+index 2108c20..7cd10e2 100644
+--- a/USCSandbox/Processor/ShaderProcessor.cs
++++ b/USCSandbox/Processor/ShaderProcessor.cs
+@@ -1,4 +1,4 @@
+-﻿using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.Converter;
++using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.Converter;
+ using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.DirectX;
+ using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Function;
+ using AssetRipper.Primitives;
+@@ -40,37 +40,35 @@ namespace USCSandbox.Processor
+             var compressedBlob = _shaderBf["compressedBlob.Array"].AsByteArray;
+ 
+             var selectedIndex = platforms.IndexOf((int)_platformId);
+-            
+-            uint selectedOffset;
+-            if (offsets[selectedIndex].Children.Count > 0)
+-                selectedOffset = offsets[selectedIndex]["Array"][0].AsUInt;
+-            else
+-                selectedOffset = offsets[selectedIndex].AsUInt;
+-            
+-            uint selectedCompressedLength;
+-            if (compressedLengths[selectedIndex].Children.Count > 0)
+-                selectedCompressedLength = compressedLengths[selectedIndex]["Array"][0].AsUInt;
+-            else
+-                selectedCompressedLength = compressedLengths[selectedIndex].AsUInt;
+-            
+-            uint selectedDecompressedLength;
+-            if (offsets[selectedIndex].Children.Count > 0)
+-                selectedDecompressedLength = decompressedLengths[selectedIndex]["Array"][0].AsUInt;
+-            else
+-                selectedDecompressedLength = decompressedLengths[selectedIndex].AsUInt;
+-
+-            var decompressedBlob = new byte[selectedDecompressedLength];
+-            var lz4Decoder = new Lz4DecoderStream(new MemoryStream(compressedBlob));
+-            lz4Decoder.Read(decompressedBlob, 0, (int)selectedDecompressedLength);
+-            lz4Decoder.Dispose();
+-
+-            var blobManager = new BlobManager(decompressedBlob, _engVer);
+-            for (var i = 0; i < blobManager.Entries.Count; i++)
++            if (selectedIndex < 0)
++                throw new NotSupportedException($"shader has no {_platformId} program");
++
++            static List<uint> Values(AssetTypeValueField f) =>
++                f.Children.Count > 0 ? f["Array"].Select(c => c.AsUInt).ToList() : [f.AsUInt];
++
++            // Unity 2019.3+ splits a platform's blob into separately LZ4-compressed segments;
++            // each blob entry says which segment it lives in.
++            var segOffsets = Values(offsets[selectedIndex]);
++            var segCompressed = Values(compressedLengths[selectedIndex]);
++            var segDecompressed = Values(decompressedLengths[selectedIndex]);
++            var segments = new List<byte[]>(segOffsets.Count);
++            for (var k = 0; k < segOffsets.Count; k++)
+             {
+-                var entryBytes = blobManager.GetRawEntry(i);
+-                File.WriteAllBytes($"dbg_entry_{i}.bin", entryBytes);
++                var data = new byte[segDecompressed[k]];
++                using var lz4Decoder = new Lz4DecoderStream(
++                    new MemoryStream(compressedBlob, (int)segOffsets[k], (int)segCompressed[k]));
++                var read = 0;
++                while (read < data.Length)
++                {
++                    var n = lz4Decoder.Read(data, read, data.Length - read);
++                    if (n <= 0) break;
++                    read += n;
++                }
++                segments.Add(data);
+             }
+ 
++            var blobManager = new BlobManager(segments, _engVer);
++
+             _sb.AppendLine($"Shader \"{name}\" {{");
+             _sb.Indent();
+             {
+@@ -204,7 +202,6 @@ namespace USCSandbox.Processor
+                 var index = basket.index;
+ 
+                 var subProg = blobManager.GetShaderSubProgram((int)subProgInfo.BlobIndex);
+-                File.WriteAllBytes($"dbg_entry_data_{subProgInfo.BlobIndex}.bin", subProg.ProgramData);
+ 
+                 ShaderParams param;
+                 if (index != -1)
+@@ -297,8 +294,7 @@ namespace USCSandbox.Processor
+                     case ShaderGpuProgramType.ConsoleFS:
+                     {
+                         var conv = new USCShaderConverter();
+-                        conv.LoadUnityNvnShader(new MemoryStream(subProg.ProgramData), graphicApi, _engVer);
+-                        conv.ConvertNvnShaderToUShaderProgram(programType);
++                        throw new NotSupportedException("Switch shaders are not supported in this build");
+                         conv.ApplyMetadataToProgram(subProg, param, _engVer);
+ 
+                         UShaderFunctionToHLSL hlslConverter = new UShaderFunctionToHLSL(conv.ShaderProgram!, depth);
+diff --git a/USCSandbox/Program.cs b/USCSandbox/Program.cs
+index b015030..73a865b 100644
+--- a/USCSandbox/Program.cs
++++ b/USCSandbox/Program.cs
+@@ -1,4 +1,4 @@
+-﻿using AssetsTools.NET;
++using AssetsTools.NET;
+ using AssetsTools.NET.Extra;
+ using USCSandbox.Processor;
+ using UnityVersion = AssetRipper.Primitives.UnityVersion;
+@@ -163,8 +163,16 @@ namespace USCSandbox
+                 }
+ 
+                 var shaderName = shaderBf["m_ParsedForm"]["m_Name"].AsString;
+-                var shaderProcessor = new ShaderProcessor(shaderBf, ver.Value, platform);
+-                string shaderText = shaderProcessor.Process();
++                string shaderText;
++                try
++                {
++                    shaderText = new ShaderProcessor(shaderBf, ver.Value, platform).Process();
++                }
++                catch (Exception e)
++                {
++                    Console.WriteLine($"{shaderName} FAILED: {e.GetType().Name}: {e.Message}");
++                    continue;
++                }
+ 
+                 Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, "out", Path.GetDirectoryName(shaderName)!));
+                 File.WriteAllText($"{Path.Combine(Environment.CurrentDirectory, "out", shaderName)}.shader", shaderText);
+diff --git a/USCSandbox/USCSandbox.csproj b/USCSandbox/USCSandbox.csproj
+index 9bb2fc7..9a0a555 100644
+--- a/USCSandbox/USCSandbox.csproj
++++ b/USCSandbox/USCSandbox.csproj
+@@ -1,4 +1,4 @@
+-﻿<Project Sdk="Microsoft.NET.Sdk">
++<Project Sdk="Microsoft.NET.Sdk">
+ 
+   <PropertyGroup>
+     <OutputType>Exe</OutputType>
+@@ -9,27 +9,10 @@
+   </PropertyGroup>
+ 
+   <ItemGroup>
+-    <Reference Include="AssetRipper.Primitives">
+-      <HintPath>..\Libs\AssetRipper.Primitives.dll</HintPath>
+-    </Reference>
+-    <Reference Include="AssetsTools.NET">
+-      <HintPath>..\Libs\AssetsTools.NET.dll</HintPath>
+-    </Reference>
+-    <Reference Include="MsgPack">
+-      <HintPath>..\Libs\MsgPack.dll</HintPath>
+-    </Reference>
+-    <Reference Include="Ryujinx.Common">
+-      <HintPath>..\Libs\Ryujinx.Common.dll</HintPath>
+-    </Reference>
+-    <Reference Include="Ryujinx.Graphics.Shader">
+-      <HintPath>..\Libs\Ryujinx.Graphics.Shader.dll</HintPath>
+-    </Reference>
+-    <Reference Include="Ryujinx.ShaderTools">
+-      <HintPath>..\Libs\Ryujinx.ShaderTools.dll</HintPath>
+-    </Reference>
+-    <Reference Include="Spv.Generator">
+-      <HintPath>..\Libs\Spv.Generator.dll</HintPath>
+-    </Reference>
++    <Compile Remove="UltraShaderConverter/NVN/**" />
++    <Compile Remove="UltraShaderConverter/UShader/NVN/**" />
++    <PackageReference Include="AssetsTools.NET" Version="3.0.0" />
++    <PackageReference Include="AssetRipper.Primitives" Version="2.0.0" />
+   </ItemGroup>
+ 
+ </Project>
+diff --git a/USCSandbox/UltraShaderConverter/Converter/USCShaderConverter.cs b/USCSandbox/UltraShaderConverter/Converter/USCShaderConverter.cs
+index 0c16770..dae6443 100644
+--- a/USCSandbox/UltraShaderConverter/Converter/USCShaderConverter.cs
++++ b/USCSandbox/UltraShaderConverter/Converter/USCShaderConverter.cs
+@@ -1,14 +1,11 @@
+-﻿using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.DirectXDisassembler;
++using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.DirectXDisassembler;
+ using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.DirectX;
+ using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Function;
+ using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL;
+ using AssetRipper.Primitives;
+ using AssetsTools.NET;
+-using Ryujinx.Graphics.Shader.Translation;
+ using USCSandbox;
+ using USCSandbox.Processor;
+-using USCSandbox.UltraShaderConverter.NVN;
+-using USCSandbox.UltraShaderConverter.UShader.NVN;
+ 
+ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.Converter
+ {
+@@ -17,7 +14,6 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.Converter
+         public byte[] dbgData1 = new byte[0];
+         public byte[] dbgData2 = new byte[0];
+         public DirectXCompiledShader? DxShader { get; set; }
+-        public NvnUnityShader? NvnShader { get; set; }
+         public UShaderProgram? ShaderProgram { get; set; }
+ 
+         public void LoadDirectXCompiledShader(Stream data, GPUPlatform graphicApi, UnityVersion version)
+@@ -47,56 +43,6 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.Converter
+             }
+         }
+ 
+-        public void LoadUnityNvnShader(Stream data, GPUPlatform graphicApi, UnityVersion version)
+-        {
+-            byte[] fTest = new byte[8];
+-            data.Position = 8;
+-            data.Read(fTest, 0, 8);
+-
+-            if (BitConverter.ToInt64(fTest) == -1)
+-            {
+-                // newer merged version
+-                data.Position = 0x18;
+-                BinaryReader br = new BinaryReader(data);
+-
+-                uint shaderFragOffset = br.ReadUInt32();
+-                uint shaderVertOffset = br.ReadUInt32();
+-                data.Position += 16;
+-                uint shaderFragDataOffset = br.ReadUInt32();
+-                uint shaderVertDataOffset = br.ReadUInt32();
+-                data.Position += 16;
+-                uint shaderFragFlags = br.ReadUInt32();
+-                uint shaderVertFlags = br.ReadUInt32();
+-                data.Position += 16;
+-
+-                long basePosition = data.Position;
+-
+-                const int SECOND_OFFSET = 0x30;
+-                long shaderVertPosition = basePosition + shaderVertOffset + shaderVertDataOffset + SECOND_OFFSET;
+-                long shaderFragPosition = basePosition + shaderFragOffset + shaderFragDataOffset + SECOND_OFFSET;
+-                int shaderVertLength = (int)(shaderFragPosition - shaderVertPosition);
+-                int shaderFragLength = (int)(data.Length - shaderFragPosition);
+-
+-                data.Position = shaderFragPosition;
+-                byte[] fragBytes = br.ReadBytes(shaderFragLength);
+-                data.Position = shaderVertPosition;
+-                byte[] vertBytes = br.ReadBytes(shaderVertLength);
+-
+-                dbgData1 = vertBytes;
+-                dbgData2 = fragBytes;
+-
+-                TranslationOptions opt = new TranslationOptions(TargetLanguage.Glsl, TargetApi.OpenGL, TranslationFlags.None);
+-                TranslatorContext fragCtx = Translator.CreateContext(0, new GpuAccessor(fragBytes), opt);
+-                TranslatorContext vertCtx = Translator.CreateContext(0, new GpuAccessor(vertBytes), opt);
+-
+-                NvnShader = new NvnUnityShader(vertCtx, fragCtx);
+-            }
+-            else
+-            {
+-                throw new Exception("old format not supported");
+-                // older separated version
+-            }
+-        }
+ 
+         public void ConvertDxShaderToUShaderProgram()
+         {
+@@ -112,44 +58,6 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.Converter
+         }
+ 
+         // type is ignored if shader is not combined
+-        public void ConvertNvnShaderToUShaderProgram(ShaderGpuProgramType type)
+-        {
+-            if (NvnShader == null)
+-            {
+-                throw new Exception($"You need to call {nameof(LoadUnityNvnShader)} first!");
+-            }
+-
+-            TranslatorContext? ctx = null;
+-            if (NvnShader.CombinedShader)
+-            {
+-                if (type == ShaderGpuProgramType.ConsoleVS)
+-                {
+-                    ctx = NvnShader.VertShader;
+-                }
+-                else if (type == ShaderGpuProgramType.ConsoleFS)
+-                {
+-                    ctx = NvnShader.FragShader;
+-                }
+-                else
+-                {
+-                    throw new NotSupportedException("Only vertex and fragment shaders are supported at the moment!");
+-                }
+-            }
+-            else
+-            {
+-                ctx = NvnShader.OnlyShader;
+-            }
+-
+-            if (ctx == null)
+-            {
+-                throw new Exception("Shader type not found!");
+-            }
+-
+-            NvnProgramToUSIL nvn2UsilConverter = new NvnProgramToUSIL(ctx);
+-            nvn2UsilConverter.Convert();
+-
+-            ShaderProgram = nvn2UsilConverter.shader;
+-        }
+ 
+         public void ApplyMetadataToProgram(ShaderSubProgram subProgram, ShaderParams shaderParams, UnityVersion version)
+         {
+diff --git a/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs b/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
+index 4123eb1..f6b19b5 100644
+--- a/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
++++ b/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
+@@ -1,4 +1,4 @@
+-﻿using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Function;
++using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Function;
+ using USCSandbox.Processor;
+ 
+ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+@@ -65,7 +65,10 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+                 {
+                     int paramCbStart = param.Index;
+                     int paramCbElementSize = param.Rows * param.Columns * 4;
+-                    int paramCbTotalSize = param.Rows * param.Columns * 4 * (param.ArraySize == 0 ? 1 : param.ArraySize);
++                    // HLSL cbuffer packing: every non-matrix array element starts on a new 16-byte register.
++                    int paramCbTotalSize = (!param.IsMatrix && param.ArraySize > 1)
++                        ? 16 * (param.ArraySize - 1) + paramCbElementSize
++                        : param.Rows * param.Columns * 4 * (param.ArraySize == 0 ? 1 : param.ArraySize);
+                     int paramCbEnd = paramCbStart + paramCbTotalSize;
+ 
+                     foreach (int operandMaskAddress in operandMaskAddresses)
+@@ -82,8 +85,8 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+ 
+                             else if (param.ArraySize > 1)
+                             {
+-                                cbParamIndex = (operandMaskAddress - paramCbStart) / paramCbElementSize;
+-                                maskIndex -= 4 * cbParamIndex;
++                                cbParamIndex = (operandMaskAddress - paramCbStart) / 16;
++                                maskIndex = (operandMaskAddress - paramCbStart) % 16 / 4;
+                             }
+                             
+                             cbMasks.Add(maskIndex);
+diff --git a/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs b/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
+index d9ae9e9..7aa2d7a 100644
+--- a/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
++++ b/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
+@@ -1,4 +1,4 @@
+-﻿using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.DirectX;
++using AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.DirectX;
+ using System.Globalization;
+ 
+ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL
+@@ -321,14 +321,15 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL
+                     string[] charArray = transposeMatrix ? USILConstants.TMATRIX_MASK_CHARS : USILConstants.MATRIX_MASK_CHARS;
+                     for (int i = 0; i < mask.Length; i++)
+                     {
+-                        suffix += charArray[arrayIndex * 4 + mask[i]];
++                        int ci = arrayIndex * 4 + mask[i];
++                        suffix += ci >= 0 && ci < charArray.Length ? charArray[ci] : "/*USCS: bad matrix swizzle*/_m00";
+                     }
+                 }
+                 else
+                 {
+                     for (int i = 0; i < mask.Length; i++)
+                     {
+-                        suffix += USILConstants.MASK_CHARS[mask[i]];
++                        suffix += mask[i] >= 0 && mask[i] < USILConstants.MASK_CHARS.Length ? USILConstants.MASK_CHARS[mask[i]] : "/*USCS: bad swizzle*/x";
+                     }
+                 }
+ 
