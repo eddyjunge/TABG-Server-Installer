@@ -10,6 +10,7 @@
 //    0 on any plane, so only silhouettes and creases get lines. Near side only, creases only up
 //    close, and only where there is visible contrast (so lines fade into fog like objects do).
 //  - Sharpen: contrast-adaptive sharpening after AMD FidelityFX CAS (MIT).
+//  - Volumetric sunlight from Volumetric.shader (shadowed light shafts), added in the sun colour.
 //  - Vignette.
 Shader "Hidden/TabgVisuals/Stylize"
 {
@@ -17,6 +18,7 @@ Shader "Hidden/TabgVisuals/Stylize"
     {
         _MainTex ("Source", 2D) = "white" {}
         _RaysTex ("Rays", 2D) = "black" {}
+        _VolTex ("Volumetric", 2D) = "black" {}
     }
 
     CGINCLUDE
@@ -25,6 +27,8 @@ Shader "Hidden/TabgVisuals/Stylize"
     sampler2D _MainTex;
     float4 _MainTex_TexelSize;
     sampler2D _RaysTex;
+    sampler2D _VolTex;      // volumetric sunlight (Volumetric.shader), R = scattered light
+    float4 _Vol;            // x: strength (0 = off)
     UNITY_DECLARE_DEPTH_TEXTURE(_CameraDepthTexture);
 
     // x: ink strength 0..1, y: line width (px at 1080p), z: fade start (m), w: fade end (m)
@@ -149,6 +153,7 @@ Shader "Hidden/TabgVisuals/Stylize"
 
             fixed4 frag(v2f_img i) : SV_Target
             {
+                if (_Tone.z > 5.5) return float4(tex2D(_VolTex, i.uv).rrr, 1);
                 if (_Tone.z > 4.5)
                 {
                     float rawD = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.uv);
@@ -180,6 +185,10 @@ Shader "Hidden/TabgVisuals/Stylize"
                     float3 haze = lerp(_HazeColor.rgb, _SunColor.rgb, saturate(sunNear));
                     c = lerp(c, haze, f);
                 }
+
+                // Volumetric sunlight: shafts through the air, shadowed by the world.
+                // Over the sky (already bright) only a little, so shafts stay in front of the world.
+                if (_Vol.x > 0) c += tex2D(_VolTex, i.uv).r * _Vol.x * (sky ? 0.25 : 1.0) * _SunColor.rgb;
 
                 // Sky is not sunlit surface: no warm highlights there (they would cancel the blue).
                 c = Grade(c, sky ? 0.0 : _Grade.x);
