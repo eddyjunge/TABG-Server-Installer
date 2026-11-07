@@ -37,6 +37,12 @@ namespace TabgInstaller.Visuals
         private static readonly int CloudShapeId = Shader.PropertyToID("_CloudShape");
         private static readonly int AmbientTopId = Shader.PropertyToID("_AmbientTop");
         private static readonly int AmbientBottomId = Shader.PropertyToID("_AmbientBottom");
+        private static readonly int FlashId = Shader.PropertyToID("_Flash");
+        private static readonly int FlashColorId = Shader.PropertyToID("_FlashColor");
+        private static readonly int FlashInfoId = Shader.PropertyToID("_FlashInfo");
+        private static readonly int GlowTexId = Shader.PropertyToID("_GlowTex");
+        private readonly Vector4[] _flash = new Vector4[4];
+        private readonly Vector4[] _flashColor = new Vector4[4];
 
         // Distant haze: a cool, slightly lavender sky blue.
         private static readonly Color HazeColor = new Color(0.70f, 0.77f, 0.93f);
@@ -164,6 +170,59 @@ namespace TabgInstaller.Visuals
             _cmdLight = null;
         }
 
+        // ---------------------------------------------------------------- explosions
+
+        /// <summary>Puts visible explosions into _Flash and renders their bloom; null if none.</summary>
+        private RenderTexture RenderExplosionGlow(VisualsPlugin p, RenderTexture src)
+        {
+            var m = p.Material;
+            int n = 0;
+            var camPos = _cam.transform.position;
+            float tanHalf = Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+            foreach (var f in ExplosionGlow.Active)
+            {
+                if (n >= 4) break;
+                float k = ExplosionGlow.Envelope(f);
+                if (k <= 0.001f) continue;
+                Vector3 vp = _cam.WorldToViewportPoint(f.Position);
+                if (vp.z <= 0.5f) continue;
+                // Hidden behind a wall or hill? Ignore hits right at either end (the blast's own
+                // debris, the player's body).
+                Vector3 to = camPos - f.Position;
+                float dist = to.magnitude;
+                float start = Mathf.Min(f.Radius * 0.4f, dist * 0.5f);
+                float len = dist - start - 1.5f;
+                if (len > 0f && Physics.Raycast(f.Position + to / dist * start, to / dist, len, ~0, QueryTriggerInteraction.Ignore))
+                    continue;
+                float r = Mathf.Clamp(f.Radius * 1.3f / (vp.z * 2f * tanHalf), 0.03f, 0.7f);
+                _flash[n] = new Vector4(vp.x, vp.y, r, k * f.Power);
+                _flashColor[n] = f.Color;
+                n++;
+            }
+            m.SetVectorArray(FlashId, _flash);
+            m.SetVectorArray(FlashColorId, _flashColor);
+            m.SetVector(FlashInfoId, new Vector4(n, 0.3f, 1.0f, 0f));
+            if (n == 0)
+            {
+                m.SetTexture(GlowTexId, Texture2D.blackTexture);
+                return null;
+            }
+            int w = Mathf.Max(1, src.width / 4), h = Mathf.Max(1, src.height / 4);
+            var a = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGBHalf);
+            var b = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGBHalf);
+            Graphics.Blit(src, a, m, 3);
+            for (int pass = 0; pass < 2; pass++)
+            {
+                m.SetVector(BlurDirId, new Vector4((pass + 1f) / w, 0f, 0f, 0f));
+                Graphics.Blit(a, b, m, 4);
+                m.SetVector(BlurDirId, new Vector4(0f, (pass + 1f) / h, 0f, 0f));
+                Graphics.Blit(b, a, m, 4);
+            }
+            RenderTexture.ReleaseTemporary(b);
+            m.SetTexture(GlowTexId, a);
+            return a;
+        }
+
         // ---------------------------------------------------------------- clouds
 
         private RenderTexture RenderClouds(VisualsPlugin p, Light sun, Color sunColor, int w, int h)
@@ -263,6 +322,7 @@ namespace TabgInstaller.Visuals
                 m.SetTexture(RaysTexId, Texture2D.blackTexture);
             }
 
+            RenderTexture glow = RenderExplosionGlow(p, src);
             RenderTexture clouds = RenderClouds(p, sun, sunColor, src.width / 2, src.height / 2);
             m.SetVector(CloudsId, new Vector4(clouds != null ? 1f : 0f, 0f, 0f, 0f));
             m.SetTexture(CloudTexId, clouds != null ? (Texture)clouds : Texture2D.blackTexture);
@@ -270,6 +330,7 @@ namespace TabgInstaller.Visuals
             Graphics.Blit(src, dst, m, 0);
             if (rays != null) RenderTexture.ReleaseTemporary(rays);
             if (clouds != null) RenderTexture.ReleaseTemporary(clouds);
+            if (glow != null) RenderTexture.ReleaseTemporary(glow);
         }
     }
 }

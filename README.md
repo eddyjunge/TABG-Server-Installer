@@ -191,7 +191,7 @@ All of them are optional. Friends get them through the share code, never by hand
 | ModSettings | `mod-settings` | In-game settings for the other mods | F9 |
 | PerformanceClient | `performance-client` | FPS, culling, streaming and network optimizations, with a frame-time overlay | F10 |
 | PopupBlocker | `popup-blocker` | Hides the anti-cheat popups in the modded copy | |
-| Visuals | `visuals` | Graphics upgrade on top of TABG's own look: sharper soft shadows, stronger AO, volumetric sunlight through trees and buildings, soft 3D clouds, a livelier sea (foam, colour, sun glow), plus a gentle colour grade, sky gradient, haze, sun rays and sharpening; every part has a setting | F8 |
+| Visuals | `visuals` | Graphics upgrade on top of TABG's own look: sharper soft shadows, stronger AO, volumetric sunlight through trees and buildings, soft 3D clouds, a livelier sea (foam, colour, sun glow), explosions that light up their surroundings and glow, plus a gentle colour grade, sky gradient, haze, sun rays and sharpening; every part has a setting | F8 |
 
 ## Proximity Voice Chat
 

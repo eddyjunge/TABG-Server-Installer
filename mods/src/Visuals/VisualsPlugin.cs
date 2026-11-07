@@ -32,6 +32,7 @@ namespace TabgInstaller.Visuals
         internal ConfigEntry<float> SkyDepth;
         internal ConfigEntry<float> Vignette;
         internal ConfigEntry<float> Sharpen;
+        internal ConfigEntry<float> ExplosionGlowStrength;
         internal ConfigEntry<float> VolumetricLight;
         internal ConfigEntry<int> VolumetricSteps;
         internal ConfigEntry<bool> Water;
@@ -84,6 +85,7 @@ namespace TabgInstaller.Visuals
                 "Samples per pixel for clouds (quality vs speed)", new AcceptableValueRange<int>(8, 48)));
             Vignette = Config.Bind("Atmosphere", "Vignette", 0.25f, Range("Darker screen corners", 0f, 1f));
             Sharpen = Config.Bind("Detail", "Sharpen", 0.25f, Range("Contrast-adaptive sharpening (0 = off)", 0f, 1f));
+            ExplosionGlowStrength = Config.Bind("Explosions", "Glow", 1f, Range("Light flash, bloom and glow for explosions (0 = off)", 0f, 2f));
             BetterShadows = Config.Bind("Quality", "BetterShadows", true,
                 "Sharper soft shadows (4096 shadow map, 4 cascades) when the game's shadow quality is High");
             BetterAO = Config.Bind("Quality", "BetterAO", true,
@@ -96,8 +98,8 @@ namespace TabgInstaller.Visuals
             InkFadeStart = Config.Bind("Ink", "FadeStart", 40f, Range("Distance (m) where lines start to fade", 0f, 500f));
             InkFadeEnd = Config.Bind("Ink", "FadeEnd", 150f, Range("Distance (m) where lines are gone", 1f, 1000f));
             DebugView = Config.Bind("Debug", "View", 0, new ConfigDescription(
-                "0 normal, 1 outline mask, 2 depth, 3 passthrough, 4 sun rays, 5 distance (red = sky), 6 volumetric light, 7 clouds",
-                new AcceptableValueRange<int>(0, 7)));
+                "0 normal, 1 outline mask, 2 depth, 3 passthrough, 4 sun rays, 5 distance (red = sky), 6 volumetric light, 7 clouds, 8 explosion glow",
+                new AcceptableValueRange<int>(0, 8)));
 
             const string cat = "Visuals";
             ModSettings.ModSettingsUI.Register(cat, "Enabled", "Apply the visuals effect", Enabled);
@@ -122,6 +124,7 @@ namespace TabgInstaller.Visuals
             ModSettings.ModSettingsUI.Register(cat, "Sun Rays", "Light shafts and sun glow", SunRays);
             ModSettings.ModSettingsUI.Register(cat, "Vignette", "Darker corners", Vignette);
             ModSettings.ModSettingsUI.Register(cat, "Sharpen", "Contrast-adaptive sharpening", Sharpen);
+            ModSettings.ModSettingsUI.Register(cat, "Explosion Glow", "Light flash, bloom and glow for explosions", ExplosionGlowStrength);
             ModSettings.ModSettingsUI.Register(cat, "Outline Strength", "Outlines around objects (0 = off)", InkStrength);
             ModSettings.ModSettingsUI.Register(cat, "Outline Darkness", "0 = black lines, 1 = invisible", InkDarken);
 
@@ -181,6 +184,7 @@ namespace TabgInstaller.Visuals
 
         private void Update()
         {
+            ExplosionGlow.Update();
             if (Input.GetKeyDown(ToggleKey.Value))
             {
                 Enabled.Value = !Enabled.Value;

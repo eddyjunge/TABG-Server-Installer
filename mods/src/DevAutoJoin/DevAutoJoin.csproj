@@ -3,5 +3,6 @@
   <ItemGroup>
     <GameRef Include="UnityEngine.ImageConversionModule" />
     <GameRef Include="UnityEngine.ScreenCaptureModule" />
+    <GameRef Include="UnityEngine.PhysicsModule" />
   </ItemGroup>
 </Project>

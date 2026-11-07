@@ -9,6 +9,7 @@
   <ItemGroup>
     <GameRef Include="UnityEngine.AssetBundleModule" />
     <GameRef Include="UnityEngine.InputLegacyModule" />
+    <GameRef Include="UnityEngine.PhysicsModule" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../ModSettings/ModSettings.csproj" Private="false" />

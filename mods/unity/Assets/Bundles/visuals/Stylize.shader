@@ -12,6 +12,7 @@
 //  - Sharpen: contrast-adaptive sharpening after AMD FidelityFX CAS (MIT).
 //  - Volumetric sunlight from Volumetric.shader (shadowed light shafts), added in the sun colour.
 //  - Procedural cumulus clouds from Clouds.shader over the sky.
+//  - Explosion glow: bloom of bright parts around explosions plus a soft halo (passes 3, 4).
 //  - Vignette.
 Shader "Hidden/TabgVisuals/Stylize"
 {
@@ -21,6 +22,7 @@ Shader "Hidden/TabgVisuals/Stylize"
         _RaysTex ("Rays", 2D) = "black" {}
         _VolTex ("Volumetric", 2D) = "black" {}
         _CloudTex ("Clouds", 2D) = "black" {}
+        _GlowTex ("Glow", 2D) = "black" {}
     }
 
     CGINCLUDE
@@ -32,6 +34,32 @@ Shader "Hidden/TabgVisuals/Stylize"
     sampler2D _VolTex;      // volumetric sunlight (Volumetric.shader), R = scattered light
     sampler2D _CloudTex;    // procedural clouds (Clouds.shader): rgb premultiplied, a coverage
     float4 _Clouds;         // x: 1 = clouds on
+    // Explosions (up to 4): xy viewport uv, z halo radius (uv, aspect-corrected), w intensity.
+    float4 _Flash[4];
+    float4 _FlashColor[4];
+    float4 _FlashInfo;      // x: count, y: halo strength, z: bloom strength
+    sampler2D _GlowTex;     // blurred bright parts around explosions (passes 3 and 4)
+    float4 _BlurDir;
+
+    // Sum of the explosions' soft halos at this pixel (rgb), weighted by colour.
+    float3 FlashHalo(float2 uv)
+    {
+        float3 sum = 0;
+        float aspect = _MainTex_TexelSize.w / _MainTex_TexelSize.z;
+        for (int k = 0; k < 4; k++)
+        {
+            if (k >= (int)_FlashInfo.x) break;
+            float2 d = uv - _Flash[k].xy;
+            d.x /= aspect;
+            float r = max(1e-3, _Flash[k].z);
+            float q = dot(d, d) / (r * r);
+            // Warm-white core, saturated outer glow.
+            float3 col = _FlashColor[k].rgb;
+            float3 core = lerp(col, float3(1, 1, 1), 0.35);
+            sum += _Flash[k].w * (core * exp(-q * 3.0) * 0.6 + col * col * exp(-q * 0.5) * 0.4);
+        }
+        return sum;
+    }
     float4 _Vol;            // x: strength (0 = off)
     UNITY_DECLARE_DEPTH_TEXTURE(_CameraDepthTexture);
 
@@ -157,6 +185,7 @@ Shader "Hidden/TabgVisuals/Stylize"
 
             fixed4 frag(v2f_img i) : SV_Target
             {
+                if (_Tone.z > 7.5) return float4(tex2D(_GlowTex, i.uv).rgb + FlashHalo(i.uv), 1);
                 if (_Tone.z > 6.5) { float4 cl = tex2D(_CloudTex, i.uv); return float4(cl.rgb + (1 - cl.a) * float3(0.2, 0.3, 0.5), 1); }
                 if (_Tone.z > 5.5) return float4(tex2D(_VolTex, i.uv).rrr, 1);
                 if (_Tone.z > 4.5)
@@ -210,6 +239,13 @@ Shader "Hidden/TabgVisuals/Stylize"
                 }
 
                 if (_Ink.x > 0) c = lerp(c, c * _InkShape.x, InkMask(i.uv));
+
+                // Explosions: bloom of their bright parts plus a soft coloured halo.
+                if (_FlashInfo.x > 0)
+                {
+                    float3 glow = tex2D(_GlowTex, i.uv).rgb * _FlashInfo.z + FlashHalo(i.uv) * _FlashInfo.y;
+                    c = 1.0 - (1.0 - saturate(c)) * (1.0 - saturate(glow));
+                }
 
                 // Procedural clouds, only where the sky shows (terrain always stays in front).
                 if (sky && _Clouds.x > 0)
@@ -276,6 +312,45 @@ Shader "Hidden/TabgVisuals/Stylize"
                     uv += step;
                 }
                 return float4(sum / wsum, 1);
+            }
+            ENDCG
+        }
+
+        // 3: bright pass around explosions (quarter resolution): what is bright near a flash glows
+        Pass
+        {
+            CGPROGRAM
+            #pragma vertex vert_img
+            #pragma fragment frag
+            #pragma target 3.0
+
+            fixed4 frag(v2f_img i) : SV_Target
+            {
+                float3 c = tex2D(_MainTex, i.uv).rgb;
+                float3 halo = FlashHalo(i.uv);
+                float near = saturate(max(halo.r, max(halo.g, halo.b)) * 2.0);
+                float lum = Luminance(c);
+                float3 bright = c * smoothstep(0.45, 0.9, lum);
+                return float4(bright * near, 1);
+            }
+            ENDCG
+        }
+
+        // 4: 9-tap gaussian blur along _BlurDir (RGB)
+        Pass
+        {
+            CGPROGRAM
+            #pragma vertex vert_img
+            #pragma fragment frag
+            #pragma target 3.0
+
+            fixed4 frag(v2f_img i) : SV_Target
+            {
+                float2 d = _BlurDir.xy;
+                float3 s = tex2D(_MainTex, i.uv).rgb * 0.2270270270;
+                s += (tex2D(_MainTex, i.uv + d * 1.3846153846).rgb + tex2D(_MainTex, i.uv - d * 1.3846153846).rgb) * 0.3162162162;
+                s += (tex2D(_MainTex, i.uv + d * 3.2307692308).rgb + tex2D(_MainTex, i.uv - d * 3.2307692308).rgb) * 0.0702702703;
+                return float4(s, 1);
             }
             ENDCG
         }

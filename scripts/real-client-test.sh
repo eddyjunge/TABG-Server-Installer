@@ -16,6 +16,7 @@
 #                     screenshots: Unity -batchmode -nographics, Wine audio off)
 #   TABG_TEST_COMPARE "plugin.guid/Section/Key[=v1,v2,..]": each screenshot once per value (bool: off, on)
 #   TABG_TEST_BENCH   "plugin.guid/Section/Key=v1,v2@start,seconds,rounds": FPS per value ([bench] in the log)
+#   TABG_TEST_EXPLODE "Prefab@seconds,distance": spawn a game explosion in front of the camera (boom-*.png)
 #   TABG_TEST_RELAY=1 host through Unity Relay and join by code (needs internet) instead of 127.0.0.1
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -39,7 +40,7 @@ if [[ ! -e "$TEST/TotallyAccurateBattlegrounds.exe" ]]; then
   mkdir -p "$TEST"
   cp -a --reflink=auto "$SRC"/. "$TEST"/
 fi
-rm -rf "$TEST/BepInEx/plugins" "$TEST/BepInEx/config" "$TEST/BepInEx/LogOutput.log" "$TEST"/BepInEx/autojoin-*.png
+rm -rf "$TEST/BepInEx/plugins" "$TEST/BepInEx/config" "$TEST/BepInEx/LogOutput.log" "$TEST"/BepInEx/autojoin-*.png "$TEST"/BepInEx/boom-*.png
 mkdir -p "$TEST/BepInEx/plugins"
 [[ -e "$SRC/BepInEx/plugins/AntiCheatBootErrorRemover.dll" ]] && cp "$SRC/BepInEx/plugins/AntiCheatBootErrorRemover.dll" "$TEST/BepInEx/plugins/"
 cp mods/src/DevAutoJoin/bin/Release/netstandard2.0/Tabg.DevAutoJoin.dll "$TEST/BepInEx/plugins/"
@@ -70,7 +71,7 @@ fi
   cd "$TEST"
   export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/823130"
   export STEAM_COMPAT_APP_ID=823130 SteamAppId=823130 SteamGameId=823130
-  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN="$JOIN" TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}" TABG_AUTOJOIN_HEAL="${TABG_TEST_HEAL:-}" TABG_AUTOJOIN_DROP="${TABG_TEST_DROP:-}" TABG_AUTOJOIN_COMPARE="${TABG_TEST_COMPARE:-}" TABG_AUTOJOIN_BENCH="${TABG_TEST_BENCH:-}"
+  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN="$JOIN" TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}" TABG_AUTOJOIN_HEAL="${TABG_TEST_HEAL:-}" TABG_AUTOJOIN_DROP="${TABG_TEST_DROP:-}" TABG_AUTOJOIN_COMPARE="${TABG_TEST_COMPARE:-}" TABG_AUTOJOIN_BENCH="${TABG_TEST_BENCH:-}" TABG_AUTOJOIN_EXPLODE="${TABG_TEST_EXPLODE:-}"
   GAME_ARGS=()
   if [[ -z "${TABG_TEST_WINDOW:-}" ]]; then
     GAME_ARGS=(-batchmode -nographics)
@@ -91,7 +92,7 @@ pkill -f "$TEST/TotallyAccurateBattlegrounds.exe" 2>/dev/null || true
 wait $CLIENT 2>/dev/null || true
 
 cp "$TEST/BepInEx/LogOutput.log" "$OUT/client-bepinex.log" 2>/dev/null || true
-cp "$TEST"/BepInEx/autojoin-*.png "$OUT/" 2>/dev/null || true
+cp "$TEST"/BepInEx/autojoin-*.png "$TEST"/BepInEx/boom-*.png "$OUT/" 2>/dev/null || true
 echo "== client (DevAutoJoin)"; grep -E 'auto-join|Console\] (Player|Not accepted|Join)' "$OUT/client-bepinex.log" | sed 's/^\[[^]]*\] *//' | head -60 || true
 echo "== server"; sed 's/\x1b\[[0-9;]*m//g' "$OUT/server.log" | grep -vE 'code=2 .*PlayerUpdate' | tail -25
 echo "== bot"; head -3 "$OUT/bot.log" 2>/dev/null | cut -c1-160 || true
