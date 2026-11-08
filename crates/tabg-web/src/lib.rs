@@ -1,7 +1,7 @@
 //! The dashboard (server-rendered HTML + htmx, live updates over SSE) and the local JSON API the
 //! `tabg` CLI uses. Both listen on 127.0.0.1 only; see [`security`].
 
-mod api;
+pub mod api;
 mod pages;
 pub mod security;
 

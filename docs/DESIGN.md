@@ -8,7 +8,7 @@ Status: agreed 2026-11-04. This replaces everything in the old repo (three GUIs,
 |---|---|
 | Audience | Friends hosting a server on their own PC (Windows or Linux) |
 | Game server | Our own server written in Rust, replacing Landfall's Unity dedicated server. Unmodified TABG clients connect to it |
-| Tool | One Rust binary, `tabg`: CLI + local web dashboard |
+| Tool | One Rust binary, `tabg`: native window (egui), CLI, local web dashboard |
 | Runtime | Console window + browser. The CLI talks to the running host over localhost |
 | Dashboard | Server-rendered HTML + htmx, live updates over SSE, served by the binary |
 | Joining | Real join codes via Unity Relay, the same way the official server gets them. Direct IP (UPnP) as fallback |
@@ -120,7 +120,7 @@ The official server sends `GameServerHeartbeat` to Landfall's community backend 
 ## 5. The tabg tool
 
 ### 5.1 Process model and CLI
-- `tabg` with no arguments starts the host process and opens the dashboard. Other commands talk to a running host over its local API, starting one if needed.
+- `tabg` with no arguments opens the window (`tabg-gui`, eframe/egui, no webview), which is the host process; without a display it falls back to the browser dashboard, which `tabg host` always uses. Other commands talk to a running host over its local API, starting one if needed.
 - Commands: `setup`, `start`, `stop`, `restart`, `status`, `console`, `say`, `kick`, `ban`, `admins`, `config get|set`, `preset list|apply|save`, `mods`, `share`, `join <code>`, `backup list|restore`, `logs`.
 
 ### 5.2 State and the declarative model
@@ -187,6 +187,7 @@ crates/
   tabg-world       world.json model and loader (navmesh later)
   tabg-server      tick loop: net + game + world, IPC to the host
   tabg-host        supervisor, state/apply, player store, backups, sync, UPnP, heartbeat
+  tabg-gui         the window (eframe/egui)
   tabg-web         dashboard + local API (axum, htmx, SSE)
   tabg             the binary: CLI entry point
   tabg-probe       headless test client that speaks the protocol (tests + debugging)

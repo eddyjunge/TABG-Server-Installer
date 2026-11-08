@@ -27,8 +27,8 @@
 
 ## About
 
-`tabg` is a single program for Windows and Linux. Run it and a dashboard opens in your browser. A few
-minutes later you have a TABG server and a join code you can send to your friends.
+`tabg` is a single program for Windows and Linux. Run it and its window opens. A few minutes later you
+have a TABG server and a join code you can send to your friends.
 
 It brings its **own TABG game server, written in Rust**. You don't need Landfall's Unity server,
 SteamCMD, BepInEx or Citruslib on the host. Friends join with their **normal, unmodified TABG**
@@ -51,7 +51,7 @@ the shooting range, friends run `tabg join <code>` once and get exactly the mods
 
 1. Go to the [latest release](https://github.com/jonassneu/TABG-Server-Installer/releases/latest).
 2. Download `tabg-<version>-windows-x86_64.exe` or `tabg-<version>-linux-x86_64`.
-3. Put it anywhere and run it. It's one file of about 8 MB with nothing to install.
+3. Put it anywhere and run it. It's one file of about 20 MB with nothing to install.
 
 No release exists yet for the rewrite. Until one does, [build it yourself](#building).
 
@@ -59,14 +59,15 @@ No release exists yet for the rewrite. Until one does, [build it yourself](#buil
 
 ### Server Setup
 
-1. Run `tabg`. The dashboard opens at `http://localhost:7780`.
-2. Click **Setup**. tabg finds your Steam libraries and exports the map data from the TABG Dedicated
-   Server. This takes about 10 seconds and only happens once per game version.
-3. Pick a preset on the **Presets** page, for example *Battle Royale*, *Gun Game* or *Deathmatch*.
-4. Click **Start**. The **Overview** page shows the join code.
+1. Run `tabg`. Choose **Host a server** in the window that opens.
+2. tabg finds your Steam libraries and exports the map data from the TABG Dedicated Server. This only
+   happens once per game version.
+3. Pick a preset on the **Game mode** tab, for example *Battle Royale*, *Gun Game* or *Deathmatch*.
+4. Click **Start server**. The join code appears at the top of the window.
 5. Send the join code to your friends. They enter it in TABG's join field.
 
-Everything also works from the command line:
+On a machine without a display, `tabg` opens the browser dashboard instead (`tabg host` does that on
+purpose). Everything also works from the command line, also while the window is open:
 
 ```bash
 tabg setup
@@ -77,13 +78,13 @@ tabg status          # join code, players
 
 ### Client Setup (for players)
 
-Only needed if the host uses client extras. The dashboard's **Share** page then shows a share code
-(`TABG1-…`) next to the join code.
+Only needed if the host uses client extras. The **Mods** tab then makes a share code (`TABG1-…`) and
+a message to send to friends.
 
-1. Run `tabg join TABG1-…`.
+1. Run `tabg`, choose **Join a friend** and paste the code. Or run `tabg join TABG1-…`.
 2. tabg makes a separate modded copy of your TABG (your Steam install is not touched), installs
    BepInEx and exactly the mods the server uses, and checks every file's hash.
-3. Run `tabg launch` to start the modded copy. Don't launch it from Steam.
+3. Press **Start TABG** (or run `tabg launch`) to start the modded copy. Don't launch it from Steam.
 
 When the host changes the mod list, run `tabg join` with the new code. Mods from an earlier join are
 removed.
@@ -96,8 +97,8 @@ removed.
   either through Unity Relay join codes (the same way the official server does it) or by direct IP
   (`IP:7777`, with UPnP).
 - **Server list.** Optionally show up in TABG's community server list.
-- **Dashboard and CLI.** Status, join code, players, live console and quick actions, in the browser
-  or with `tabg …`.
+- **Window, dashboard and CLI.** Status, join code, players, live console and quick actions, in
+  tabg's own window (native, written in Rust), in the browser, or with `tabg …`.
 - **Crash recovery.** The game server runs as a child process. If it crashes, it is restarted with a
   new join code and the crash log is kept.
 - **Backups.** Taken automatically before every config change (the last 50 are kept); one click
@@ -106,20 +107,25 @@ removed.
 - **Inventory check.** Drops, throws and healing with items a player never picked up are reported in
   the console, or refused with `game.inventory_check = "enforce"`.
 
-### Dashboard
+### The Window
 
-- **Overview.** Status, join code, players, start/stop/restart.
-- **Console.** Live server log, plus the same commands admins use in chat.
-- **Players.** Kick, ban, make admin, and player history (joins, kills, deaths, wins).
-- **Settings.** Name, password, mode, map, teams, players to start, countdown, loot, time of day,
-  bots, voice range, vehicles and network, all with validation.
-- **Loadout & Ring.** What everyone lands with, ring times, sizes and speeds, and gun game levels.
-- **Presets.** The built-in presets, plus your own saved ones.
-- **Share.** The client mod pack and the share code.
-- **Backups.** List and restore.
+| Tab | What it does |
+|---|---|
+| **Overview** | Who's online by squad, kick, ban or remove bots, the match phase, a message to everyone, latest activity |
+| **Players** | Everyone online or ever seen, heal, give items, admins, bans |
+| **Game mode** | The built-in presets and your own, with a preview of exactly what changes before you use one |
+| **Rules** | Mode, map, teams, starting rules, loot, time of day, bots, vehicles, respawns and more, with validation. Nothing applies until you press Save |
+| **Loadout and ring** | What everyone lands with, ring times, sizes and speeds with a live diagram, gun game levels |
+| **Mods** | The client mods friends need, your own DLLs, the share code and a message for friends |
+| **Console** | Live log with filters and search, plus the same commands admins use in chat |
+| **Server** | Name, password, player limit, network, backups with one-click restore, game data |
 
-The dashboard only listens on `127.0.0.1`, checks `Host` and `Origin`, and needs a session token, so
-websites in your browser can't control your server.
+Anything that would disconnect people asks first and says how many are online. The window talks to the
+same host as the CLI, so closing it stops the server.
+
+The browser dashboard (`tabg host`) has the same features in a simpler form. It only listens on
+`127.0.0.1`, checks `Host` and `Origin`, and needs a session token, so websites in your browser can't
+control your server.
 
 ### Game Modes
 
@@ -242,7 +248,7 @@ servers that haven't enabled it.
 
 ## Configuration
 
-Each server is one `tabg.toml`. The dashboard and the CLI both edit it, and lobby rules reload
+Each server is one `tabg.toml`. The window, the dashboard and the CLI all edit it, and lobby rules reload
 without a restart. Unknown keys are errors, so typos don't go unnoticed.
 
 ```bash
@@ -340,7 +346,7 @@ The design, all decisions and the milestones are in [docs/DESIGN.md](docs/DESIGN
 ### Repo layout
 
 ```
-crates/   Rust workspace: tabg (CLI), tabg-host, tabg-web (dashboard), tabg-server and
+crates/   Rust workspace: tabg (CLI), tabg-gui (window), tabg-host, tabg-web (dashboard), tabg-server and
           tabg-game (the game server), tabg-protocol, tabg-net, tabg-utp (relay), tabg-world
 mods/     C# BepInEx client mods and the map dumper
 presets/  built-in presets
@@ -366,6 +372,8 @@ This software is provided **as-is** with no warranty of any kind. Use at your ow
 | [ENet-CSharp](https://github.com/nxrighthere/ENet-CSharp) 2.4.8 | Stanislav Denisov and the ENet authors | Network library, vendored in `crates/tabg-enet-sys/vendor` (MIT) |
 | [htmx](https://htmx.org/) | Big Sky Software | Dashboard, in `crates/tabg-web/assets` (BSD Zero) |
 | [tabg-word-list](https://github.com/landfallgames/tabg-word-list) | Landfall Games | Server name filter for the community list (MIT) |
+| [Inter](https://github.com/rsms/inter) | The Inter Project Authors | Window font, in `crates/tabg-gui/assets/fonts` (OFL) |
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | The JetBrains Mono Project Authors | Window font for numbers and logs, in `crates/tabg-gui/assets/fonts` (OFL) |
 
 ### Downloaded at Runtime (pinned by sha256)
 
@@ -379,7 +387,7 @@ This software is provided **as-is** with no warranty of any kind. Use at your ow
 
 - [**CyrusTheLesser**](https://github.com/CyrusTheLesser) for [Citruslib](https://github.com/CyrusTheLesser/Citruslib).
   The old installer depended on it, and the admin command set people know comes from it.
-- The Rust crates in `Cargo.lock`, especially tokio, axum, maud, clap and ureq.
+- The Rust crates in `Cargo.lock`, especially egui, tokio, axum, maud, clap and ureq.
 
 > **Know someone who should be credited?** Open an issue or DM me on Discord.
 

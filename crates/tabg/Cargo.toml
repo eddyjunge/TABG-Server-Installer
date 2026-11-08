@@ -11,6 +11,7 @@ rust-version.workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+tabg-gui = { path = "../tabg-gui" }
 tabg-host = { path = "../tabg-host" }
 tabg-web = { path = "../tabg-web" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }

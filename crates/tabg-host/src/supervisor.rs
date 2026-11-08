@@ -52,6 +52,8 @@ pub struct HostStatus {
     pub players: Vec<PlayerInfo>,
     pub started_at: Option<u64>,
     pub restarts: u32,
+    /// After a crash: when the next start happens.
+    pub retry_at: Option<u64>,
     pub last_crash: Option<Crash>,
     /// A problem that stops the server from starting (bad config, no map data…).
     pub error: Option<String>,
@@ -62,7 +64,8 @@ pub struct LogLine {
     /// Increases by one per line (for followers).
     pub seq: u64,
     pub at: u64,
-    /// `server` (the child's log), `game` (room events), `console` (commands and replies), `host`.
+    /// `server` (the child's log), `game` (room events), `chat`, `console` (commands and replies),
+    /// `host`.
     pub source: String,
     pub text: String,
 }
@@ -146,6 +149,7 @@ impl Supervisor {
                     players: Vec::new(),
                     started_at: None,
                     restarts: 0,
+                    retry_at: None,
                     last_crash: None,
                     error: None,
                 },
@@ -175,6 +179,16 @@ impl Supervisor {
 
     pub fn status(&self) -> HostStatus {
         self.lock().status.clone()
+    }
+
+    /// The status, unless the supervisor is busy right now (for callers that must not block,
+    /// like a UI thread while the server loads its map).
+    pub fn try_status(&self) -> Option<HostStatus> {
+        match self.inner.try_lock() {
+            Ok(inner) => Some(inner.status.clone()),
+            Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner().status.clone()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
     }
 
     pub fn logs(&self, last: usize) -> Vec<LogLine> {
@@ -274,6 +288,7 @@ impl Supervisor {
         inner.status.players.clear();
         inner.status.phase = "stopped".into();
         inner.status.started_at = None;
+        inner.status.retry_at = None;
         self.log(&mut inner, "host", "server stopped".into());
         self.publish(&inner);
     }
@@ -312,6 +327,7 @@ impl Supervisor {
     fn spawn(&self, inner: &mut Inner) {
         inner.generation += 1;
         let generation = inner.generation;
+        inner.status.retry_at = None;
         if let Err(e) = crate::ipc::load(&self.paths) {
             inner.status.error = Some(e.clone());
             inner.status.state = RunState::Stopped;
@@ -411,7 +427,12 @@ impl Supervisor {
                     if let RoomEvent::Banned { id, .. } = &e {
                         ban = Some(id.clone());
                     }
-                    self.log(&mut inner, "game", describe(&e));
+                    let source = if matches!(e, RoomEvent::Chat { .. }) {
+                        "chat"
+                    } else {
+                        "game"
+                    };
+                    self.log(&mut inner, source, describe(&e));
                 }
             }
             self.publish(&inner);
@@ -482,6 +503,7 @@ impl Supervisor {
         inner.status.state = RunState::Restarting;
         let wait = inner.backoff;
         inner.backoff = (inner.backoff * 2).min(MAX_BACKOFF);
+        inner.status.retry_at = Some(at + wait.as_secs());
         self.log(
             &mut inner,
             "host",

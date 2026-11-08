@@ -1,6 +1,6 @@
 //! `tabg` — host a TABG server for your friends.
 //!
-//! `tabg` alone starts the host (dashboard + server supervisor) and opens the dashboard. Other
+//! `tabg` alone opens the host's window (server supervisor and local API behind it). Other
 //! commands talk to a running host over its local API, or work on the files directly when no
 //! host is running.
 
@@ -28,7 +28,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Start the host and open the dashboard (the default).
+    /// Open the tabg window (the default when a display is available).
+    Gui {
+        /// Port of the local API the other commands use (on 127.0.0.1).
+        #[arg(long, default_value_t = 7780)]
+        port: u16,
+    },
+    /// Start the host without a window and open the browser dashboard.
     Host {
         /// Don't open a browser.
         #[arg(long)]
@@ -218,15 +224,43 @@ fn print_log(v: &Value, last: u64) -> u64 {
     last
 }
 
+/// Started by double-click, Windows gives us a console nobody wants next to the window. Started
+/// from a terminal, that console is shared with the shell and stays.
+#[cfg(windows)]
+fn hide_own_console() {
+    unsafe extern "system" {
+        fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+        fn FreeConsole() -> i32;
+    }
+    let mut processes = [0u32; 2];
+    // SAFETY: the buffer is valid for the length passed; FreeConsole takes no arguments.
+    unsafe {
+        if GetConsoleProcessList(processes.as_mut_ptr(), 2) == 1 {
+            FreeConsole();
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn hide_own_console() {}
+
 fn main() {
     let cli = Cli::parse();
     let paths = Paths::from_env();
-    let command = cli.command.unwrap_or(Cmd::Host {
-        no_browser: false,
-        port: 7780,
-        no_start: false,
+    let command = cli.command.unwrap_or(if tabg_gui::display_available() {
+        Cmd::Gui { port: 7780 }
+    } else {
+        Cmd::Host {
+            no_browser: false,
+            port: 7780,
+            no_start: false,
+        }
     });
     match command {
+        Cmd::Gui { port } => {
+            hide_own_console();
+            host::run_window(&paths, port);
+        }
         Cmd::Serve => {
             host::init_logging(true);
             if let Err(e) = tabg_host::ipc::serve_child(&paths) {

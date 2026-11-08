@@ -496,9 +496,13 @@ pub fn load_nav(world_path: &std::path::Path) -> Option<std::sync::Arc<tabg_game
     let path = world_path.with_extension("nav");
     let file = std::fs::File::open(&path).ok()?;
     let mut bytes = Vec::new();
-    flate2::read::GzDecoder::new(file)
-        .read_to_end(&mut bytes)
-        .ok()?;
+    if let Err(e) = flate2::read::GzDecoder::new(file).read_to_end(&mut bytes) {
+        warn!(
+            "{}: {e}; bots are off until setup runs again",
+            path.display()
+        );
+        return None;
+    }
     match tabg_game::nav::NavGrid::decode(&bytes) {
         Ok(grid) => Some(std::sync::Arc::new(grid)),
         Err(e) => {

@@ -260,6 +260,22 @@ pub fn grant(
     list: fn(&mut ServerToml) -> &mut Vec<String>,
     what: &str,
 ) -> Result<apply::Applied, String> {
+    let verb = if grant.on { "add" } else { "remove" };
+    let who = grant.who.trim();
+    let id = app
+        .supervisor
+        .resolve_player(who)
+        .unwrap_or_else(|| who.to_owned());
+    grant_because(app, grant, list, &format!("{verb} {what} {id}"))
+}
+
+/// [`grant`] with a backup reason of the caller's choosing.
+pub fn grant_because(
+    app: &AppState,
+    grant: &Grant,
+    list: fn(&mut ServerToml) -> &mut Vec<String>,
+    reason: &str,
+) -> Result<apply::Applied, String> {
     let who = grant.who.trim();
     if who.is_empty() {
         return Err("who?".into());
@@ -274,14 +290,7 @@ pub fn grant(
     if grant.on {
         entries.push(id.clone());
     }
-    let verb = if grant.on { "add" } else { "remove" };
-    apply::apply(
-        &app.paths,
-        &app.supervisor,
-        &c,
-        &format!("{verb} {what} {id}"),
-    )
-    .map_err(|e| e.to_string())
+    apply::apply(&app.paths, &app.supervisor, &c, reason).map_err(|e| e.to_string())
 }
 
 async fn set_admin(State(app): State<AppState>, Json(body): Json<Grant>) -> ApiResult {

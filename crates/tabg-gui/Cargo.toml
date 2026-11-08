@@ -1,0 +1,27 @@
+[package]
+name = "tabg-gui"
+description = "The tabg window: a native egui front end for the host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+rfd = "0.17.2"
+serde_json = "1.0.154"
+tabg-game = { path = "../tabg-game" }
+tabg-host = { path = "../tabg-host" }
+tabg-server = { path = "../tabg-server" }
+tabg-web = { path = "../tabg-web" }
+tabg-world = { path = "../tabg-world" }
+tokio = { version = "1.54.1", features = ["rt", "sync"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+egui_kittest = { version = "0.36.2", features = ["wgpu", "snapshot"] }
+tempfile = "3.27.0"

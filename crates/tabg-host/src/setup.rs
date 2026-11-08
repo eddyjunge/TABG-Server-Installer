@@ -28,6 +28,8 @@ const EMBEDDED_DUMPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dumper.
 /// Port the dump run's server listens on, far from the usual 7777.
 const DUMP_PORT: u16 = 47_999;
 const DUMP_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long the walkability grid may take after the map data is written.
+const NAV_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What tabg knows about this machine's TABG.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -247,9 +249,17 @@ pub fn dump_world(
             let _ = child.kill();
             break;
         }
-        // The plugin quits the game after writing, but don't wait for a slow shutdown.
+        // The plugin quits the game after writing, but don't wait for a slow shutdown. It writes
+        // the JSON first and the bots' walkability grid after it, so wait for a whole grid too.
         if out.exists() && std::fs::metadata(&out).is_ok_and(|m| m.len() > 0) {
-            std::thread::sleep(Duration::from_secs(2));
+            let deadline = Instant::now() + NAV_TIMEOUT;
+            while Instant::now() < deadline
+                && tabg_server::load_nav(&out).is_none()
+                && child.try_wait().ok().flatten().is_none()
+            {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            std::thread::sleep(Duration::from_secs(1));
             let _ = child.kill();
             break;
         }

@@ -1,4 +1,5 @@
-//! The host process: dashboard + local API on 127.0.0.1, and the game server supervisor.
+//! The host process: window or browser dashboard, the local API on 127.0.0.1, and the game
+//! server supervisor.
 
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -26,6 +27,12 @@ pub fn spawner(paths: &Paths) -> tabg_host::supervisor::Spawner {
         let exe = std::env::current_exe().unwrap_or_else(|_| "tabg".into());
         let mut c = Command::new(exe);
         c.arg("serve").env("TABG_HOME", &root);
+        #[cfg(windows)]
+        {
+            // The window has no console for the child to inherit; don't let it open its own.
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
         c
     })
 }
@@ -46,19 +53,16 @@ fn dashboard_url(port: u16, token: &str) -> String {
     format!("http://127.0.0.1:{port}/?token={token}")
 }
 
-pub fn run(paths: &Paths, port: u16, browser: bool, autostart: bool) {
-    // One host per data dir: if it's already running, just show it.
-    if Api::find(paths).is_some() {
-        let f: HostFile =
-            serde_json::from_slice(&std::fs::read(paths.host_file()).unwrap_or_default())
-                .unwrap_or_else(|e| die(e));
-        let url = dashboard_url(f.port, &f.token);
-        println!("tabg is already running: {url}");
-        if browser {
-            open_browser(&url);
-        }
-        return;
-    }
+/// A host that is set up but not serving yet.
+struct Started {
+    runtime: tokio::runtime::Runtime,
+    listener: tokio::net::TcpListener,
+    app: Arc<tabg_web::App>,
+    url: String,
+}
+
+/// Claim the data dir: bind the local API and publish its address for the CLI.
+fn start(paths: &Paths, port: u16) -> Started {
     init_logging(false);
     let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|e| die(e));
     let (listener, port) = runtime.block_on(async {
@@ -100,7 +104,42 @@ pub fn run(paths: &Paths, port: u16, browser: bool, autostart: bool) {
     if let Err(e) = tabg_host::apply::read_config(paths) {
         supervisor.host_log(format!("tabg.toml: {e}"));
     }
-    let url = dashboard_url(port, &token);
+    Started {
+        runtime,
+        listener,
+        app,
+        url: dashboard_url(port, &token),
+    }
+}
+
+fn running_url(paths: &Paths) -> Option<String> {
+    Api::find(paths)?;
+    let f: HostFile = serde_json::from_slice(&std::fs::read(paths.host_file()).unwrap_or_default())
+        .unwrap_or_else(|e| die(e));
+    Some(dashboard_url(f.port, &f.token))
+}
+
+fn finish(paths: &Paths, app: &tabg_web::App) {
+    println!("stopping…");
+    app.supervisor.stop();
+    let _ = std::fs::remove_file(paths.host_file());
+}
+
+pub fn run(paths: &Paths, port: u16, browser: bool, autostart: bool) {
+    // One host per data dir: if it's already running, just show it.
+    if let Some(url) = running_url(paths) {
+        println!("tabg is already running: {url}");
+        if browser {
+            open_browser(&url);
+        }
+        return;
+    }
+    let Started {
+        runtime,
+        listener,
+        app,
+        url,
+    } = start(paths, port);
     println!("tabg dashboard: {url}");
     println!("data: {}", paths.root.display());
     println!("press Ctrl-C to stop");
@@ -109,17 +148,57 @@ pub fn run(paths: &Paths, port: u16, browser: bool, autostart: bool) {
     }
     let install = tabg_host::setup::Install::load(paths);
     if !install.ready() {
-        supervisor.host_log("setup needed: run it from the dashboard or with `tabg setup`");
+        app.supervisor
+            .host_log("setup needed: run it from the dashboard or with `tabg setup`");
     } else if autostart {
-        supervisor.start();
+        app.supervisor.start();
     }
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
     };
-    if let Err(e) = runtime.block_on(tabg_web::serve(app, listener, shutdown)) {
+    if let Err(e) = runtime.block_on(tabg_web::serve(Arc::clone(&app), listener, shutdown)) {
         eprintln!("dashboard stopped: {e}");
     }
-    println!("stopping…");
-    supervisor.stop();
-    let _ = std::fs::remove_file(paths.host_file());
+    finish(paths, &app);
+}
+
+/// The default: a native window. The local API keeps running behind it for the CLI.
+pub fn run_window(paths: &Paths, port: u16) {
+    if let Some(url) = running_url(paths) {
+        if let Err(e) = tabg_gui::run_already_running(url.clone()) {
+            println!("tabg is already running: {url} ({e})");
+        }
+        return;
+    }
+    let Started {
+        runtime,
+        listener,
+        app,
+        url,
+    } = start(paths, port);
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = Arc::clone(&app);
+    let server = runtime.spawn(async move {
+        let shutdown = async {
+            let _ = stopped.await;
+        };
+        if let Err(e) = tabg_web::serve(served, listener, shutdown).await {
+            eprintln!("local API stopped: {e}");
+        }
+    });
+    let window = tabg_gui::run(tabg_gui::Host {
+        app: Arc::clone(&app),
+        runtime: runtime.handle().clone(),
+    });
+    if let Err(e) = window {
+        // No usable graphics: hosting still works in the browser.
+        eprintln!("couldn't open the window: {e}");
+        println!("tabg dashboard: {url}");
+        println!("press Ctrl-C to stop");
+        open_browser(&url);
+        let _ = runtime.block_on(tokio::signal::ctrl_c());
+    }
+    let _ = stop.send(());
+    let _ = runtime.block_on(server);
+    finish(paths, &app);
 }
