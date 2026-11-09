@@ -31,6 +31,7 @@ namespace TabgInstaller.Visuals
 
         private static readonly Color Fire = new Color(1f, 0.62f, 0.28f);
         private static readonly Color Energy = new Color(0.55f, 0.75f, 1f);
+        private static readonly Color Magnesium = new Color(0.96f, 0.97f, 1f);
 
         // Explosion-component users that are not fiery blasts.
         private static readonly string[] Skip =
@@ -49,6 +50,13 @@ namespace TabgInstaller.Visuals
             string name = e.transform.root.name.ToLowerInvariant() + " " + e.name.ToLowerInvariant();
             if (p.DebugView.Value != 0)
                 Debug.Log($"[Visuals] explosion '{name}' damage {e.damage} radius {e.radius} at {e.transform.position}");
+            // A flashbang does no damage but is the brightest thing in the game, for a moment.
+            if (e.transform.root.name.StartsWith("Ex_Stun", System.StringComparison.Ordinal))
+            {
+                Spawn(e.transform.position, Mathf.Clamp(e.radius, 6f, 25f), Magnesium, 0.3f, 2.5f);
+                return;
+            }
+            if (GrenadeFx.IsField(e.transform.root.name)) return;    // fields tick; they have their own look
             if (e.damage < 10f || e.radius < 1.5f) return;
             foreach (var s in Skip)
                 if (name.Contains(s)) return;
@@ -58,15 +66,16 @@ namespace TabgInstaller.Visuals
 
             float radius = e.radius * (e.scale ? e.transform.localScale.x : 1f);
             radius = Mathf.Clamp(radius, 2f, 40f);
+            if (!energy) GrenadeFx.OnBlast(e, radius);
             Spawn(e.transform.position, radius, energy ? Energy : Fire);
         }
 
         /// <summary>Also used by tests: a flash at a point.</summary>
-        internal static void Spawn(Vector3 position, float radius, Color color)
+        internal static void Spawn(Vector3 position, float radius, Color color, float duration = -1f, float boost = 1f)
         {
             var p = VisualsPlugin.Instance;
-            float power = p != null ? p.ExplosionGlowStrength.Value : 1f;
-            float duration = Mathf.Lerp(0.6f, 1.4f, Mathf.InverseLerp(2f, 20f, radius));
+            float power = (p != null ? p.ExplosionGlowStrength.Value : 1f) * boost;
+            if (duration <= 0f) duration = Mathf.Lerp(0.6f, 1.4f, Mathf.InverseLerp(2f, 20f, radius));
 
             var go = new GameObject("TABG Visuals explosion light");
             go.transform.position = position + Vector3.up * Mathf.Min(1.5f, radius * 0.2f);

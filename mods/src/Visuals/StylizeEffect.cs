@@ -41,6 +41,31 @@ namespace TabgInstaller.Visuals
         private static readonly int FlashColorId = Shader.PropertyToID("_FlashColor");
         private static readonly int FlashInfoId = Shader.PropertyToID("_FlashInfo");
         private static readonly int GlowTexId = Shader.PropertyToID("_GlowTex");
+        private static readonly int SmokePosId = Shader.PropertyToID("_SmokePos");
+        private static readonly int SmokeInfoId = Shader.PropertyToID("_SmokeInfo");
+        private static readonly int SmokeColorId = Shader.PropertyToID("_SmokeColor");
+        private static readonly int SmokeParamsId = Shader.PropertyToID("_SmokeParams");
+        private static readonly int SmokeNoiseId = Shader.PropertyToID("_SmokeNoise");
+        private static readonly int SmokeTexId = Shader.PropertyToID("_SmokeTex");
+        private static readonly int SmokeOnId = Shader.PropertyToID("_SmokeOn");
+        private static readonly int StunId = Shader.PropertyToID("_Stun");
+        private static readonly int StunFrozenId = Shader.PropertyToID("_StunFrozen");
+        private static readonly int StunBlurId = Shader.PropertyToID("_StunBlur");
+        private readonly Vector4[] _smokePos = new Vector4[VolumetricSmoke.MaxDrawn];
+        private readonly Vector4[] _smokeInfo = new Vector4[VolumetricSmoke.MaxDrawn];
+        private readonly Vector4[] _smokeColor = new Vector4[VolumetricSmoke.MaxDrawn];
+        private readonly Vector4[] _smokeEmit = new Vector4[VolumetricSmoke.MaxDrawn];
+        private static readonly int SmokeEmitId = Shader.PropertyToID("_SmokeEmit");
+        private RenderTexture _stunFrozen, _stunVeil;
+        private static readonly int WeatherId = Shader.PropertyToID("_Weather");
+        private static readonly int WeatherColorId = Shader.PropertyToID("_WeatherColor");
+        private static readonly int PrecipId = Shader.PropertyToID("_Precip");
+        private static readonly int PrecipWindId = Shader.PropertyToID("_PrecipWind");
+        private static readonly int PrecipColorId = Shader.PropertyToID("_PrecipColor");
+        private static readonly int LensId = Shader.PropertyToID("_Lens");
+
+        /// <summary>The last frame this effect drew; flashbangs need it to replace the game's overlay.</summary>
+        internal static int LastRenderFrame = -10;
         private readonly Vector4[] _flash = new Vector4[4];
         private readonly Vector4[] _flashColor = new Vector4[4];
 
@@ -68,6 +93,7 @@ namespace TabgInstaller.Visuals
             RemoveLightBuffers();
             if (_vol != null) { _vol.Release(); Destroy(_vol); _vol = null; }
             if (_volTmp != null) { _volTmp.Release(); Destroy(_volTmp); _volTmp = null; }
+            ReleaseFrozen();
         }
 
         private void OnPreCull()
@@ -245,12 +271,121 @@ namespace TabgInstaller.Visuals
             cm.SetColor(AmbientTopId, Color.Lerp(new Color(0.78f, 0.84f, 0.96f), sky, 0.3f) * 0.85f);
             cm.SetColor(AmbientBottomId, Color.Lerp(new Color(0.58f, 0.6f, 0.74f), sky, 0.2f) * 0.75f);
             float baseH = p.CloudHeight.Value;
-            cm.SetVector(CloudLayerId, new Vector4(baseH, baseH + 550f, p.CloudCoverage.Value, 1f));
+            cm.SetVector(CloudLayerId, new Vector4(baseH, baseH + 550f, Mathf.Min(0.95f, p.CloudCoverage.Value + Weather.Overcast * 0.35f), 1f));
             float wind = Time.time * 6f;
             cm.SetVector(CloudShapeId, new Vector4(wind, wind * 0.4f, 900f, p.CloudSteps.Value));
             var rt = RenderTexture.GetTemporary(Mathf.Max(1, w), Mathf.Max(1, h), 0, RenderTextureFormat.ARGBHalf);
             Graphics.Blit(Texture2D.blackTexture, rt, cm, 0);
             return rt;
+        }
+
+        // ---------------------------------------------------------------- smoke
+
+        private RenderTexture RenderSmoke(VisualsPlugin p, Light sun, Color sunColor, int w, int h)
+        {
+            var sm = p.SmokeMaterial;
+            var noise = SmokeNoise.Texture;
+            if (sm == null || noise == null) return null;
+            int n = VolumetricSmoke.Fill(_cam.transform.position, p.VolumetricSmoke.Value, _smokePos, _smokeInfo, _smokeColor, _smokeEmit, out float largest);
+            if (n == 0) return null;
+
+            _cam.CalculateFrustumCorners(new Rect(0, 0, 1, 1), 1f, Camera.MonoOrStereoscopicEye.Mono, _corners);
+            var t = _cam.transform;
+            var rays = new Matrix4x4();
+            rays.SetRow(0, t.TransformVector(_corners[0]));
+            rays.SetRow(1, t.TransformVector(_corners[3]));
+            rays.SetRow(2, t.TransformVector(_corners[1]));
+            rays.SetRow(3, t.TransformVector(_corners[2]));
+            sm.SetMatrix(FrustumRaysId, rays);
+            sm.SetVector(CamPosId, t.position);
+            sm.SetVector(SunDirId, sun != null ? -sun.transform.forward : Vector3.up);
+            sm.SetColor(SunColorId, sunColor * 0.9f);
+            Color sky = RenderSettings.ambientSkyColor;
+            sm.SetColor(AmbientTopId, Color.Lerp(new Color(0.55f, 0.6f, 0.7f), sky, 0.3f) * 0.75f);
+            sm.SetColor(AmbientBottomId, Color.Lerp(new Color(0.3f, 0.3f, 0.34f), sky, 0.15f) * 0.7f);
+            sm.SetVectorArray(SmokePosId, _smokePos);
+            sm.SetVectorArray(SmokeInfoId, _smokeInfo);
+            sm.SetVectorArray(SmokeColorId, _smokeColor);
+            sm.SetVectorArray(SmokeEmitId, _smokeEmit);
+            // One noise tile holds four billows, so this makes each about a third of the smoke's radius.
+            float tile = Mathf.Clamp(largest * 1.2f, 2f, 80f);
+            sm.SetVector(SmokeParamsId, new Vector4(n, p.SmokeSteps.Value, tile, Mathf.Clamp(7f / largest, 0.15f, 3f)));
+            sm.SetTexture(SmokeNoiseId, noise);
+
+            w = Mathf.Max(1, w);
+            h = Mathf.Max(1, h);
+            var a = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGBHalf);
+            var b = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGBHalf);
+            Graphics.Blit(Texture2D.blackTexture, a, sm, 0);
+            sm.SetVector(BlurDirId, new Vector4(1f / w, 0f, 0f, 0f));
+            Graphics.Blit(a, b, sm, 1);
+            sm.SetVector(BlurDirId, new Vector4(0f, 1f / h, 0f, 0f));
+            Graphics.Blit(b, a, sm, 1);
+            RenderTexture.ReleaseTemporary(b);
+            return a;
+        }
+
+        // ---------------------------------------------------------------- flashbang
+
+        private void ReleaseFrozen()
+        {
+            if (_stunFrozen == null) return;
+            Flashbang.VeilTexture = null;
+            _stunFrozen.Release();
+            Destroy(_stunFrozen);
+            _stunFrozen = null;
+            _stunVeil.Release();
+            Destroy(_stunVeil);
+            _stunVeil = null;
+        }
+
+        /// <summary>Blurs a quarter-res copy of src into a temporary (caller releases it).</summary>
+        private static RenderTexture BlurredCopy(Material m, RenderTexture src, int w, int h)
+        {
+            var a = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
+            var b = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
+            Graphics.Blit(src, a);
+            for (int pass = 0; pass < 2; pass++)
+            {
+                m.SetVector(BlurDirId, new Vector4((pass + 1f) / w, 0f, 0f, 0f));
+                Graphics.Blit(a, b, m, 4);
+                m.SetVector(BlurDirId, new Vector4(0f, (pass + 1f) / h, 0f, 0f));
+                Graphics.Blit(b, a, m, 4);
+            }
+            RenderTexture.ReleaseTemporary(b);
+            return a;
+        }
+
+        /// <summary>Sets up the flashbang composite; returns the blurred view to release, or null.</summary>
+        private RenderTexture PrepareFlashbang(Material m, RenderTexture src)
+        {
+            Flashbang.Tick();
+            if (!Flashbang.Visible)
+            {
+                ReleaseFrozen();
+                m.SetVector(StunId, Vector4.zero);
+                return null;
+            }
+            int w = Mathf.Max(1, src.width / 4), h = Mathf.Max(1, src.height / 4);
+            RenderTexture blur = BlurredCopy(m, src, w, h);
+            if (Flashbang.CapturePending || _stunFrozen == null)
+            {
+                Flashbang.CapturePending = false;
+                if (_stunFrozen == null || _stunFrozen.width != w || _stunFrozen.height != h)
+                {
+                    ReleaseFrozen();
+                    _stunFrozen = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32) { name = "TabgFlashFrozen" };
+                    _stunVeil = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32) { name = "TabgFlashVeil" };
+                }
+                // The moment of the flash: this frame, as it was, burned in.
+                Graphics.Blit(blur, _stunFrozen);
+            }
+            m.SetVector(StunId, new Vector4(Flashbang.Blind, Flashbang.Age, Flashbang.Burn, Flashbang.Tail));
+            m.SetTexture(StunFrozenId, _stunFrozen);
+            m.SetTexture(StunBlurId, blur);
+            Graphics.Blit(_stunFrozen, _stunVeil, m, 5);
+            Flashbang.VeilTexture = _stunVeil;
+            return blur;
         }
 
         // ---------------------------------------------------------------- image effect
@@ -263,6 +398,7 @@ namespace TabgInstaller.Visuals
                 Graphics.Blit(src, dst);
                 return;
             }
+            LastRenderFrame = Time.frameCount;
             var m = p.Material;
 
             // Sun position on screen; visibility fades as it leaves the view or sets.
@@ -275,7 +411,7 @@ namespace TabgInstaller.Visuals
                 float onScreen = 1f - Mathf.Clamp01((Mathf.Max(Mathf.Abs(vp.x - 0.5f), Mathf.Abs(vp.y - 0.5f)) - 0.5f) / 0.4f);
                 float aboveHorizon = Mathf.Clamp01(-sun.transform.forward.y * 4f + 0.2f);
                 float visible = vp.z > 0f ? onScreen * aboveHorizon : 0f;
-                sunVec = new Vector4(vp.x, vp.y, visible, p.SunRays.Value);
+                sunVec = new Vector4(vp.x, vp.y, visible * (1f - Weather.Overcast), p.SunRays.Value);
                 sunColor = sun.color * Mathf.Clamp(sun.intensity, 0.3f, 1f);
                 if (p.DebugView.Value != 0 && Time.unscaledTime >= _nextSunLog)
                 {
@@ -297,7 +433,23 @@ namespace TabgInstaller.Visuals
             m.SetVector(RayParamsId, new Vector4(0f, 0.65f, hazeDensity, 0f));
 
             bool vol = _volThisFrame && _vol != null;
-            m.SetVector(VolId, new Vector4(vol ? p.VolumetricLight.Value : 0f, 0f, 0f, 0f));
+            m.SetVector(VolId, new Vector4(vol ? p.VolumetricLight.Value * (1f - Weather.Overcast) : 0f, 0f, 0f, 0f));
+
+            _cam.CalculateFrustumCorners(new Rect(0, 0, 1, 1), 1f, Camera.MonoOrStereoscopicEye.Mono, _corners);
+            var camT = _cam.transform;
+            var worldRays = new Matrix4x4();
+            worldRays.SetRow(0, camT.TransformVector(_corners[0]));
+            worldRays.SetRow(1, camT.TransformVector(_corners[3]));
+            worldRays.SetRow(2, camT.TransformVector(_corners[1]));
+            worldRays.SetRow(3, camT.TransformVector(_corners[2]));
+            m.SetMatrix(FrustumRaysId, worldRays);
+            m.SetVector(WeatherId, new Vector4(Weather.Fog, Weather.Overcast, 8f, Weather.Flash));
+            m.SetColor(WeatherColorId, Weather.FogColor);
+            m.SetVector(PrecipId, new Vector4(Weather.Snow, Weather.Rain, Weather.Wet, Weather.Sand));
+            m.SetVector(PrecipWindId, new Vector4(Weather.WindOffset.x, Weather.WindOffset.y, Weather.Wind, 0f));
+            m.SetColor(PrecipColorId, Weather.PrecipColor);
+            if (SmokeNoise.Texture != null) m.SetTexture(SmokeNoiseId, SmokeNoise.Texture);
+            m.SetVector(CamPosId, camT.position);
             m.SetTexture(VolTexId, vol ? (Texture)_vol : Texture2D.blackTexture);
 
             RenderTexture rays = null;
@@ -327,7 +479,27 @@ namespace TabgInstaller.Visuals
             m.SetVector(CloudsId, new Vector4(clouds != null ? 1f : 0f, 0f, 0f, 0f));
             m.SetTexture(CloudTexId, clouds != null ? (Texture)clouds : Texture2D.blackTexture);
 
-            Graphics.Blit(src, dst, m, 0);
+            RenderTexture smoke = RenderSmoke(p, sun, sunColor, src.width / 2, src.height / 2);
+            m.SetVector(SmokeOnId, new Vector4(smoke != null ? 1f : 0f, 0f, 0f, 0f));
+            m.SetTexture(SmokeTexId, smoke != null ? (Texture)smoke : Texture2D.blackTexture);
+            RenderTexture stunBlur = PrepareFlashbang(m, src);
+
+            bool lens = p.WeatherLens.Value && p.DebugView.Value == 0 && (Weather.LensRain > 0.001f || Weather.LensSnow > 0.001f || Weather.LensSand > 0.001f);
+            if (lens)
+            {
+                // Drops refract the finished picture, so it has to exist first.
+                var finished = RenderTexture.GetTemporary(src.width, src.height, 0, src.format);
+                Graphics.Blit(src, finished, m, 0);
+                m.SetVector(LensId, new Vector4(Weather.LensRain, Weather.LensSnow, Weather.LensSand, Weather.Gust));
+                Graphics.Blit(finished, dst, m, 6);
+                RenderTexture.ReleaseTemporary(finished);
+            }
+            else
+            {
+                Graphics.Blit(src, dst, m, 0);
+            }
+            if (smoke != null) RenderTexture.ReleaseTemporary(smoke);
+            if (stunBlur != null) RenderTexture.ReleaseTemporary(stunBlur);
             if (rays != null) RenderTexture.ReleaseTemporary(rays);
             if (clouds != null) RenderTexture.ReleaseTemporary(clouds);
             if (glow != null) RenderTexture.ReleaseTemporary(glow);

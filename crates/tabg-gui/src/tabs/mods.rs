@@ -99,7 +99,7 @@ const MODS: [ModRow; 12] = [
         "visuals",
         "Visuals",
         "F8",
-        "Better shadows, clouds, sea and explosions",
+        "Better shadows, clouds, sea, smoke and explosions",
     ),
 ];
 

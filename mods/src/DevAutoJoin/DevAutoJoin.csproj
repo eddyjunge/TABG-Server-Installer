@@ -4,5 +4,7 @@
     <GameRef Include="UnityEngine.ImageConversionModule" />
     <GameRef Include="UnityEngine.ScreenCaptureModule" />
     <GameRef Include="UnityEngine.PhysicsModule" />
+    <GameRef Include="UnityEngine.ParticleSystemModule" />
+    <GameRef Include="UnityEngine.TerrainModule" />
   </ItemGroup>
 </Project>

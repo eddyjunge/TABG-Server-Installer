@@ -29,8 +29,18 @@ namespace Tabg.DevAutoJoin
     ///                        frame times for `seconds` each (uncapped: vsync off, no frame limit); logs
     ///                        "[bench]" lines with average FPS, frame time and 1 % lows per value
     ///   TABG_AUTOJOIN_EXPLODE "Prefab@seconds,distance": spawn one of the game's loaded explosion prefabs
-    ///                        (e.g. Ex_MissileExpl) that far in front of the camera; with
-    ///                        TABG_AUTOJOIN_COMPARE, once per value, captured at the flash (boom-*.png)
+    ///                        (e.g. Ex_MissileExpl, Ex_Stun) or a grenade's smoke ("Smoke Grenade") that far in
+    ///                        front of the camera; with TABG_AUTOJOIN_COMPARE, once per value, captured at
+    ///                        the flash (boom-*.png)
+    ///   TABG_AUTOJOIN_BURST  comma-separated seconds after the explosion to capture (default 0.12)
+    ///   TABG_AUTOJOIN_SEQUENCE "A,B,C@seconds,distance,shot1,shot2": spawn these prefabs one after another in front of
+    ///                        the camera, each captured at the two delays (seq-NAME-1.png, seq-NAME-2.png)
+    ///   TABG_AUTOJOIN_GOTO   "Layer@seconds": teleport to the terrain most painted with a layer whose name holds
+    ///                        Layer (Deser, Snow, Grass), to test biome-dependent things
+    ///   TABG_AUTOJOIN_SETTLE seconds to let a TABG_AUTOJOIN_COMPARE value take effect before its screenshot
+    ///   TABG_AUTOJOIN_TARGET "Name@shots": stand in front of the first building whose name starts with Name, face it,
+    ///                        and put each TABG_AUTOJOIN_EXPLODE blast on its wall (to test destruction)
+    ///   TABG_AUTOJOIN_FPS    frame cap, and keeps running when unfocused (for a hidden test window)
     ///   TABG_AUTOJOIN_COMPARE "plugin.guid/Section/Key": every screenshot is taken once per value, a few
     ///                        frames apart: off/on for a bool, or "...Key=v1,v2" (files -off/-on or -v1/-v2)
     ///
@@ -58,6 +68,8 @@ namespace Tabg.DevAutoJoin
         private int _dropItem = -1;
         private int _dropCount;
         private float _dropAt = -1f;
+        private int _fpsCap = -1;
+        private bool _benching;
         private float[] _shotTimes = { 10f, 30f, 50f, 60f, 70f, 85f };
 
         private void Awake()
@@ -71,6 +83,7 @@ namespace Tabg.DevAutoJoin
                 return;
             }
 
+            int.TryParse(Environment.GetEnvironmentVariable("TABG_AUTOJOIN_FPS"), out _fpsCap);
             if (float.TryParse(Environment.GetEnvironmentVariable("TABG_AUTOJOIN_QUIT"), out float quit))
             {
                 _quitAfter = quit;
@@ -179,6 +192,7 @@ namespace Tabg.DevAutoJoin
         private System.Collections.IEnumerator Explosions(string prefabName, float distance)
         {
             GameObject prefab = null;
+            ParticleSystem smoke = null;
             var names = new System.Collections.Generic.SortedSet<string>();
             foreach (var e in Resources.FindObjectsOfTypeAll<Explosion>())
             {
@@ -187,7 +201,16 @@ namespace Tabg.DevAutoJoin
                 names.Add(root.name);
                 if (root.name == prefabName) prefab = root;
             }
-            if (prefab == null)
+            foreach (var g in Resources.FindObjectsOfTypeAll<Grenade>())
+            {
+                var root = g.transform.root.gameObject;
+                if (root.scene.IsValid()) continue;
+                names.Add(root.name);
+                if (root.name != prefabName) continue;
+                // Only the smoke itself: the whole item needs a thrower and a network owner.
+                smoke = root.GetComponentsInChildren<ParticleSystem>(true).FirstOrDefault(ps => !ps.main.playOnAwake);
+            }
+            if (prefab == null && smoke == null)
             {
                 Logger.LogWarning($"explode: no loaded prefab {prefabName}; loaded: {string.Join(", ", names)}");
                 yield break;
@@ -196,6 +219,15 @@ namespace Tabg.DevAutoJoin
             string[] kv = string.IsNullOrEmpty(compare) ? null : compare.Split(new[] { '=' }, 2);
             var entry = kv != null ? FindSetting(kv[0]) : null;
             string[] values = entry == null ? new[] { "" } : kv.Length > 1 ? kv[1].Split(',') : new[] { "false", "true" };
+            // Far-away map chunks are inactive; go there first so the target's bounds are real.
+            yield return ApproachTarget();
+            bool targeted = AimAtTarget(out Vector3 wall, out Vector3 along, out int shots);
+            if (targeted)
+                values = Enumerable.Range(0, shots).Select(i => i.ToString()).ToArray();
+            string burst = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_BURST");
+            float[] delays = string.IsNullOrEmpty(burst)
+                ? new[] { 0.12f }
+                : burst.Split(',').Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
             object original = entry?.BoxedValue;
             int shot = 0;
             foreach (string v in values)
@@ -208,19 +240,41 @@ namespace Tabg.DevAutoJoin
                 fwd.y = 0f;
                 Vector3 pos = cam.transform.position + fwd.normalized * distance;
                 if (Physics.Raycast(pos + Vector3.up * 50f, Vector3.down, out RaycastHit hit, 200f)) pos = hit.point + Vector3.up * 0.3f;
-                Instantiate(prefab, pos, Quaternion.identity);
+                if (targeted)
+                    pos = wall + along * (shot - (shots - 1) * 0.5f) * 3.2f + Vector3.up * Mathf.Min(shot, 2);
+                ParticleSystem spawned = null;
+                if (smoke != null)
+                {
+                    spawned = Instantiate(smoke, pos, smoke.transform.rotation);
+                    spawned.gameObject.SetActive(true);
+                    spawned.Play(true);
+                }
+                else
+                {
+                    Instantiate(prefab, pos, Quaternion.identity);
+                }
                 Logger.LogInfo($"explode: {prefabName} at {pos} ({(entry == null ? "" : kv[0] + "=" + v)})");
-                // Capture at the flash, then let it finish before the next one.
-                float t = Time.realtimeSinceStartup + 0.12f;
-                while (Time.realtimeSinceStartup < t) yield return null;
-                yield return new WaitForEndOfFrame();
-                var tex = ScreenCapture.CaptureScreenshotAsTexture();
+                if (targeted) LogWallProbe("before", pos);
                 string label = v == "false" ? "off" : v == "true" ? "on" : v;
-                string path = Path.Combine(Paths.BepInExRootPath, $"boom-{shot}-{label}.png");
-                File.WriteAllBytes(path, ImageConversion.EncodeToPNG(tex));
-                Destroy(tex);
-                t = Time.realtimeSinceStartup + 3f;
+                float start = Time.realtimeSinceStartup;
+                for (int d = 0; d < delays.Length; d++)
+                {
+                    while (Time.realtimeSinceStartup - start < delays[d]) yield return null;
+                    yield return new WaitForEndOfFrame();
+                    var tex = ScreenCapture.CaptureScreenshotAsTexture();
+                    string file = delays.Length == 1 ? $"boom-{shot}-{label}.png" : $"boom-{shot}-{label}-{delays[d].ToString("0.00", CultureInfo.InvariantCulture)}s.png";
+                    File.WriteAllBytes(Path.Combine(Paths.BepInExRootPath, file), ImageConversion.EncodeToPNG(tex));
+                    Destroy(tex);
+                    if (spawned != null)
+                    {
+                        var r = spawned.GetComponent<ParticleSystemRenderer>();
+                        Logger.LogInfo($"smoke t={delays[d]:0.00}: particles={spawned.particleCount} rendererEnabled={r.enabled} center={r.bounds.center} size={r.bounds.size}");
+                    }
+                }
+                float t = Time.realtimeSinceStartup + 3f;
                 while (Time.realtimeSinceStartup < t) yield return null;
+                if (targeted) LogWallProbe("after", pos);
+                shot++;
             }
             if (entry != null) entry.BoxedValue = original;
         }
@@ -247,6 +301,7 @@ namespace Tabg.DevAutoJoin
             }
             string[] values = kv.Length > 1 ? kv[1].Split(',') : new[] { "false", "true" };
             object original = entry.BoxedValue;
+            _benching = true;
             int vsync = QualitySettings.vSyncCount, target = Application.targetFrameRate;
             QualitySettings.vSyncCount = 0;
             Application.targetFrameRate = -1;
@@ -277,6 +332,7 @@ namespace Tabg.DevAutoJoin
             entry.BoxedValue = original;
             QualitySettings.vSyncCount = vsync;
             Application.targetFrameRate = target;
+            _benching = false;
             foreach (string v in values)
             {
                 var t = times[v];
@@ -317,6 +373,9 @@ namespace Tabg.DevAutoJoin
             {
                 entry.SetSerializedValue(v);
                 for (int f = 0; f < 5; f++) yield return null;
+                float.TryParse(Environment.GetEnvironmentVariable("TABG_AUTOJOIN_SETTLE"), NumberStyles.Float, CultureInfo.InvariantCulture, out float settle);
+                float settled = Time.realtimeSinceStartup + settle;
+                while (Time.realtimeSinceStartup < settled) yield return null;
                 // CaptureScreenshot(path) lands an unpredictable number of frames later under
                 // Proton, so grab this very frame synchronously instead.
                 yield return new WaitForEndOfFrame();
@@ -328,6 +387,195 @@ namespace Tabg.DevAutoJoin
                 Logger.LogInfo($"screenshot {path}");
             }
             entry.BoxedValue = original;
+        }
+
+        /// <summary>Is the wall at the blast still solid for collisions and bullets?</summary>
+        private void LogWallProbe(string when, Vector3 blast)
+        {
+            Vector3 toCentre = _lookAt - blast;
+            toCentre.y = 0f;
+            toCentre.Normalize();
+            Vector3 from = blast - toCentre * 2f;
+            bool hit = Physics.Raycast(from, toCentre, out RaycastHit h, 60f, ~0, QueryTriggerInteraction.Ignore);
+            Logger.LogInfo($"wall probe {when}: {(hit ? $"hit {h.collider.name} at {h.distance:0.0} m" : "nothing within 60 m")}");
+        }
+
+        private bool _lookingAt;
+        private Vector3 _lookAt;
+
+        private System.Collections.IEnumerator ApproachTarget()
+        {
+            string target = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_TARGET");
+            if (string.IsNullOrEmpty(target) || Player.localPlayer == null)
+                yield break;
+            string name = target.Split('@')[0];
+            var far = Resources.FindObjectsOfTypeAll<Transform>().FirstOrDefault(t => t.gameObject.scene.IsValid()
+                && t.name.StartsWith(name, StringComparison.Ordinal) && !IsUnder(t, "BossFights"));
+            if (far == null)
+                yield break;
+            Player.localPlayer.MovePlayer(far.position + Vector3.up * 40f);
+            float until = Time.realtimeSinceStartup + 2.5f;
+            while (Time.realtimeSinceStartup < until) yield return null;
+        }
+
+        private static bool IsUnder(Transform t, string parent)
+        {
+            for (; t != null; t = t.parent)
+                if (t.name.StartsWith(parent, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        /// <summary>Teleports next to the TABG_AUTOJOIN_TARGET building, facing its wall.</summary>
+        private bool AimAtTarget(out Vector3 wall, out Vector3 along, out int shots)
+        {
+            wall = along = Vector3.zero;
+            shots = 1;
+            string target = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_TARGET");
+            if (string.IsNullOrEmpty(target) || Player.localPlayer == null)
+                return false;
+            string[] at = target.Split('@');
+            if (at.Length > 1) shots = int.Parse(at[1], CultureInfo.InvariantCulture);
+            var found = FindObjectsOfType<Transform>().FirstOrDefault(t => t.name.StartsWith(at[0], StringComparison.Ordinal)
+                && !IsUnder(t, "BossFights") && t.GetComponentsInChildren<MeshRenderer>(true).Length > 0);
+            if (found == null)
+            {
+                Logger.LogWarning($"target: nothing named {at[0]}");
+                return false;
+            }
+            var renderers = found.GetComponentsInChildren<MeshRenderer>(true);
+            var bounds = renderers[0].bounds;
+            foreach (var r in renderers) bounds.Encapsulate(r.bounds);
+            // Approach from the side that is open.
+            Vector3 centre = bounds.center;
+            Vector3 best = Vector3.forward;
+            float bestRoom = -1f;
+            foreach (Vector3 d in new[] { Vector3.forward, Vector3.back, Vector3.right, Vector3.left })
+            {
+                Vector3 outside = centre + d * (Mathf.Abs(Vector3.Dot(bounds.extents, d)) + 3f);
+                float room = Physics.Raycast(outside, d, out RaycastHit hit, 60f) ? hit.distance : 60f;
+                if (room > bestRoom)
+                {
+                    bestRoom = room;
+                    best = d;
+                }
+            }
+            float reach = Mathf.Abs(Vector3.Dot(bounds.extents, best));
+            Vector3 stand = centre + best * (reach + Mathf.Min(bestRoom * 0.7f, 26f));
+            stand.y = bounds.min.y;
+            if (Physics.Raycast(new Vector3(stand.x, bounds.max.y + 8f, stand.z), Vector3.down, out RaycastHit ground, 200f)) stand.y = ground.point.y;
+            Player.localPlayer.MovePlayer(stand + Vector3.up * 2f);
+            wall = centre + best * reach;
+            wall.y = bounds.min.y + 2f;
+            along = Vector3.Cross(best, Vector3.up);
+            _lookAt = centre;
+            _lookingAt = true;
+            Logger.LogInfo($"target: {found.name} at {centre} size {bounds.size}, standing at {stand}");
+            return true;
+        }
+
+        private void LateUpdate()
+        {
+            if (!_lookingAt || Player.localPlayer == null || Player.localPlayer.m_playerCamera == null)
+                return;
+            Transform cam = Player.localPlayer.m_playerCamera.transform;
+            cam.rotation = Quaternion.LookRotation(_lookAt - cam.position);
+        }
+
+        private bool _gotoDone;
+
+        private bool _sequenceStarted;
+
+        private System.Collections.IEnumerator Sequence(string[] names, float distance, float shot1, float shot2)
+        {
+            var prefabs = new System.Collections.Generic.Dictionary<string, GameObject>();
+            foreach (var go in Resources.FindObjectsOfTypeAll<GameObject>())
+                if (!go.scene.IsValid() && go.transform.parent == null) prefabs[go.name] = go;
+            foreach (string name in names)
+            {
+                if (!prefabs.TryGetValue(name, out GameObject prefab))
+                {
+                    Logger.LogWarning($"sequence: no loaded prefab {name}");
+                    continue;
+                }
+                var cam = Camera.main;
+                if (cam == null) yield break;
+                Vector3 fwd = cam.transform.forward;
+                fwd.y = 0f;
+                Vector3 pos = cam.transform.position + fwd.normalized * distance;
+                if (Physics.Raycast(pos + Vector3.up * 50f, Vector3.down, out RaycastHit hit, 200f)) pos = hit.point + Vector3.up * 0.3f;
+                var spawned = Instantiate(prefab, pos, Quaternion.identity);
+                Logger.LogInfo($"sequence: {name} at {pos}");
+                float start = Time.realtimeSinceStartup;
+                for (int i = 1; i <= 2; i++)
+                {
+                    float at = i == 1 ? shot1 : shot2;
+                    while (Time.realtimeSinceStartup - start < at) yield return null;
+                    yield return new WaitForEndOfFrame();
+                    var tex = ScreenCapture.CaptureScreenshotAsTexture();
+                    File.WriteAllBytes(Path.Combine(Paths.BepInExRootPath, $"seq-{name.Replace(' ', '_')}-{i}.png"), ImageConversion.EncodeToPNG(tex));
+                    Destroy(tex);
+                }
+                if (spawned != null) Destroy(spawned);
+                float next = Time.realtimeSinceStartup + 2.5f;
+                while (Time.realtimeSinceStartup < next) yield return null;
+            }
+        }
+
+        private void TickSequence()
+        {
+            if (_sequenceStarted) return;
+            string text = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_SEQUENCE");
+            if (string.IsNullOrEmpty(text)) { _sequenceStarted = true; return; }
+            string[] at = text.Split('@');
+            string[] nums = at[1].Split(',');
+            if (_sinceJoin < float.Parse(nums[0], CultureInfo.InvariantCulture)) return;
+            _sequenceStarted = true;
+            StartCoroutine(Sequence(at[0].Split(','), float.Parse(nums[1], CultureInfo.InvariantCulture),
+                float.Parse(nums[2], CultureInfo.InvariantCulture), float.Parse(nums[3], CultureInfo.InvariantCulture)));
+        }
+
+        private void TickGoto()
+        {
+            if (_gotoDone) return;
+            string target = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_GOTO");
+            if (string.IsNullOrEmpty(target)) { _gotoDone = true; return; }
+            string[] at = target.Split('@');
+            float when = at.Length > 1 ? float.Parse(at[1], CultureInfo.InvariantCulture) : 5f;
+            if (_sinceJoin < when || Player.localPlayer == null) return;
+            _gotoDone = true;
+
+            float bestScore = -1f;
+            Vector3 best = Vector3.zero;
+            int terrains = 0;
+            foreach (var t in Terrain.activeTerrains)
+            {
+                if (t == null || t.terrainData == null) continue;
+                terrains++;
+                var data = t.terrainData;
+                var layers = data.terrainLayers;
+                for (int x = 1; x < 8; x++)
+                for (int z = 1; z < 8; z++)
+                {
+                    float score = 0f;
+                    for (int dx = -1; dx <= 1; dx++)
+                    for (int dz = -1; dz <= 1; dz++)
+                    {
+                        int ax = Mathf.Clamp(data.alphamapWidth * (x * 8 + dx * 2) / 64, 0, data.alphamapWidth - 1);
+                        int az = Mathf.Clamp(data.alphamapHeight * (z * 8 + dz * 2) / 64, 0, data.alphamapHeight - 1);
+                        var map = data.GetAlphamaps(ax, az, 1, 1);
+                        for (int l = 0; l < layers.Length; l++)
+                            if (layers[l] != null && layers[l].name.Contains(at[0])) score += map[0, 0, l];
+                    }
+                    if (score <= bestScore) continue;
+                    Vector3 spot = t.GetPosition() + new Vector3(data.size.x * x / 8f, 0f, data.size.z * z / 8f);
+                    spot.y = t.GetPosition().y + t.SampleHeight(spot);
+                    if (spot.y < 170f) continue;    // the sea bed is painted too
+                    bestScore = score;
+                    best = spot;
+                }
+            }
+            Logger.LogInfo($"goto {at[0]}: best {best} score {bestScore / 9f:0.00} of {terrains} terrains");
+            if (bestScore > 0f) Player.localPlayer.MovePlayer(best + Vector3.up * 2f);
         }
 
         private void TickInventory()
@@ -358,6 +606,14 @@ namespace Tabg.DevAutoJoin
         private void Update()
         {
             float dt = Time.unscaledDeltaTime;
+            // The game resets these when its settings load, so keep them applied (except while benching).
+            if (_fpsCap > 0 && !_benching)
+            {
+                Application.runInBackground = true;
+                QualitySettings.vSyncCount = 0;
+                Application.targetFrameRate = _fpsCap;
+            }
+
             if (_sinceJoin < 0f)
             {
                 // Joining before the Epic login finishes fails with "Failed generating token".
@@ -389,6 +645,8 @@ namespace Tabg.DevAutoJoin
 
             _sinceJoin += dt;
             TickJumpAndSeat(dt);
+            TickGoto();
+            TickSequence();
             if (!_explodeStarted)
             {
                 string ex = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_EXPLODE");
