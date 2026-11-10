@@ -396,6 +396,7 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                         (field("Tick rate", "tick_rate", g.tick_rate, "Movement updates per second."))
                     (field("Voice range (m)", "voice_range", g.voice_range, "For friends with the ProximityChat mod; 0: off."))
                     (check("Allow any outfit (custom-game-skins mod)", "skins", g.skins))
+                    (check("Destructible buildings (destruction mod)", "destruction", g.destruction))
                     (field("Bots", "bots", g.bots, "Fill island matches with bots (they count towards players to start)."))
                     (field("Unused vehicles", "unused_vehicles", g.unused_vehicles, "Chance per map car to add a helicopter, UFO, hover bike… next to it (0: off). Flying needs the flying-controls mod."))
                     div {
@@ -711,6 +712,7 @@ fn settings_from_form(
     parse(f, "tick_rate", &mut c.game.tick_rate)?;
     parse(f, "voice_range", &mut c.game.voice_range)?;
     c.game.skins = f.contains_key("skins");
+    c.game.destruction = f.contains_key("destruction");
     c.game.spell_drops = f.contains_key("spell_drops");
     parse(f, "bots", &mut c.game.bots)?;
     parse(f, "unused_vehicles", &mut c.game.unused_vehicles)?;

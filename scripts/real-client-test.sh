@@ -26,6 +26,8 @@
 #                     camera (boom-*.png); Prefab is e.g. Ex_MissileExpl, Ex_Stun or "Smoke Grenade"
 #   TABG_TEST_TARGET  "Name@shots": stand in front of a building whose name starts with Name and put the
 #                     TABG_TEST_EXPLODE blasts on its wall (destruction testing)
+#   TABG_TEST_USE     "gun|grenade:item@seconds,count": at TABG_TEST_TARGET, give yourself the item, pick it up
+#                     and really fire or throw it (e.g. "gun:179@60,3", "grenade:197@60,3")
 #   TABG_TEST_BURST   "0.05,0.5,2,...": seconds after the explosion to capture (default: just the flash)
 #   TABG_TEST_RELAY=1 host through Unity Relay and join by code (needs internet) instead of 127.0.0.1
 set -euo pipefail
@@ -106,7 +108,7 @@ fi
   cd "$TEST"
   export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/823130"
   export STEAM_COMPAT_APP_ID=823130 SteamAppId=823130 SteamGameId=823130
-  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN="$JOIN" TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}" TABG_AUTOJOIN_HEAL="${TABG_TEST_HEAL:-}" TABG_AUTOJOIN_DROP="${TABG_TEST_DROP:-}" TABG_AUTOJOIN_COMPARE="${TABG_TEST_COMPARE:-}" TABG_AUTOJOIN_BENCH="${TABG_TEST_BENCH:-}" TABG_AUTOJOIN_EXPLODE="${TABG_TEST_EXPLODE:-}" TABG_AUTOJOIN_BURST="${TABG_TEST_BURST:-}" TABG_AUTOJOIN_SETTLE="${TABG_TEST_SETTLE:-}" TABG_AUTOJOIN_GOTO="${TABG_TEST_GOTO:-}" TABG_AUTOJOIN_TARGET="${TABG_TEST_TARGET:-}" TABG_AUTOJOIN_SEQUENCE="${TABG_TEST_SEQUENCE:-}"
+  export WINEDLLOVERRIDES="winhttp=n,b" TABG_AUTOJOIN="$JOIN" TABG_AUTOJOIN_QUIT=$((SECONDS_TO_RUN - 20)) TABG_AUTOJOIN_SHOTS="${TABG_TEST_SHOTS:-10,30,50,60,70,85}" TABG_AUTOJOIN_JUMP="${TABG_TEST_JUMP:-}" TABG_AUTOJOIN_SEAT="${TABG_TEST_SEAT:-}" TABG_AUTOJOIN_CHAT="${TABG_TEST_CHAT:-}" TABG_AUTOJOIN_HEAL="${TABG_TEST_HEAL:-}" TABG_AUTOJOIN_DROP="${TABG_TEST_DROP:-}" TABG_AUTOJOIN_COMPARE="${TABG_TEST_COMPARE:-}" TABG_AUTOJOIN_BENCH="${TABG_TEST_BENCH:-}" TABG_AUTOJOIN_EXPLODE="${TABG_TEST_EXPLODE:-}" TABG_AUTOJOIN_BURST="${TABG_TEST_BURST:-}" TABG_AUTOJOIN_SETTLE="${TABG_TEST_SETTLE:-}" TABG_AUTOJOIN_GOTO="${TABG_TEST_GOTO:-}" TABG_AUTOJOIN_TARGET="${TABG_TEST_TARGET:-}" TABG_AUTOJOIN_USE="${TABG_TEST_USE:-}" TABG_AUTOJOIN_SEQUENCE="${TABG_TEST_SEQUENCE:-}"
   GAME_ARGS=()
   [[ "${TABG_TEST_WINDOW:-}" == visible ]] && exec "$PROTON" run "$TEST/TotallyAccurateBattlegrounds.exe" > "$PWD/../client-proton.log" 2>&1
   [[ -z "${TABG_TEST_WINDOW:-}" ]] && GAME_ARGS=(-batchmode -nographics)

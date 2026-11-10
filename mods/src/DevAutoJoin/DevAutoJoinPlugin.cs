@@ -40,6 +40,9 @@ namespace Tabg.DevAutoJoin
     ///   TABG_AUTOJOIN_SETTLE seconds to let a TABG_AUTOJOIN_COMPARE value take effect before its screenshot
     ///   TABG_AUTOJOIN_TARGET "Name@shots": stand in front of the first building whose name starts with Name, face it,
     ///                        and put each TABG_AUTOJOIN_EXPLODE blast on its wall (to test destruction)
+    ///   TABG_AUTOJOIN_USE    "gun|grenade:item@seconds,count": at the TABG_AUTOJOIN_TARGET building, /give the item (needs
+    ///                        admin), pick it up, and really fire it (magazine topped up) or throw it, `count` times
+    ///                        (boom-use-*.png)
     ///   TABG_AUTOJOIN_FPS    frame cap, and keeps running when unfocused (for a hidden test window)
     ///   TABG_AUTOJOIN_COMPARE "plugin.guid/Section/Key": every screenshot is taken once per value, a few
     ///                        frames apart: off/on for a bool, or "...Key=v1,v2" (files -off/-on or -v1/-v2)
@@ -435,6 +438,7 @@ namespace Tabg.DevAutoJoin
                 return false;
             string[] at = target.Split('@');
             if (at.Length > 1) shots = int.Parse(at[1], CultureInfo.InvariantCulture);
+            float standOff = at.Length > 2 ? float.Parse(at[2], CultureInfo.InvariantCulture) : -1f;
             var found = FindObjectsOfType<Transform>().FirstOrDefault(t => t.name.StartsWith(at[0], StringComparison.Ordinal)
                 && !IsUnder(t, "BossFights") && t.GetComponentsInChildren<MeshRenderer>(true).Length > 0);
             if (found == null)
@@ -460,7 +464,7 @@ namespace Tabg.DevAutoJoin
                 }
             }
             float reach = Mathf.Abs(Vector3.Dot(bounds.extents, best));
-            Vector3 stand = centre + best * (reach + Mathf.Min(bestRoom * 0.7f, 26f));
+            Vector3 stand = centre + best * (reach + (standOff > 0f ? standOff : Mathf.Min(bestRoom * 0.7f, 26f)));
             stand.y = bounds.min.y;
             if (Physics.Raycast(new Vector3(stand.x, bounds.max.y + 8f, stand.z), Vector3.down, out RaycastHit ground, 200f)) stand.y = ground.point.y;
             Player.localPlayer.MovePlayer(stand + Vector3.up * 2f);
@@ -479,6 +483,102 @@ namespace Tabg.DevAutoJoin
                 return;
             Transform cam = Player.localPlayer.m_playerCamera.transform;
             cam.rotation = Quaternion.LookRotation(_lookAt - cam.position);
+        }
+
+        private bool _useDone;
+
+        private void TickUse()
+        {
+            if (_useDone) return;
+            string use = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_USE");
+            if (string.IsNullOrEmpty(use)) { _useDone = true; return; }
+            string[] at = use.Split('@');
+            string[] when = at[1].Split(',');
+            if (_sinceJoin < float.Parse(when[0], CultureInfo.InvariantCulture) || Player.localPlayer == null) return;
+            _useDone = true;
+            string[] what = at[0].Split(':');
+            StartCoroutine(UseWeapon(what[0] == "grenade", int.Parse(what[1], CultureInfo.InvariantCulture), int.Parse(when[1], CultureInfo.InvariantCulture)));
+        }
+
+        private System.Collections.IEnumerator UseWeapon(bool grenade, int item, int count)
+        {
+            yield return ApproachTarget();
+            if (!AimAtTarget(out Vector3 wall, out Vector3 along, out _)) yield break;
+            float until = Time.realtimeSinceStartup + 3f;
+            while (Time.realtimeSinceStartup < until) yield return null;
+
+            Player me = Player.localPlayer;
+            FindObjectOfType<PhotonServerHandler>()?.SendChatMessage($"/give {item} {(grenade ? count : 1)}");
+            Pickup dropped = null;
+            until = Time.realtimeSinceStartup + 6f;
+            while (dropped == null && Time.realtimeSinceStartup < until)
+            {
+                // Far-off loot is culled (inactive), so the plain search can miss a fresh drop.
+                Vector3 eye = me.m_playerCamera.transform.position;
+                dropped = Resources.FindObjectsOfTypeAll<Pickup>()
+                    .Where(p => p.gameObject.scene.IsValid() && p.m_itemIndex == item)
+                    .OrderBy(p => (p.transform.position - eye).sqrMagnitude).FirstOrDefault();
+                yield return null;
+            }
+            if (dropped == null)
+            {
+                Logger.LogWarning($"use: item {item} never appeared");
+                yield break;
+            }
+            Logger.LogInfo($"use: found {dropped.name} at {dropped.transform.position}, eye {me.m_playerCamera.transform.position}");
+            dropped.gameObject.SetActive(true);
+            var startPickup = HarmonyLib.AccessTools.Method(typeof(InteractionHandler), "StartPickup");
+            StartCoroutine((System.Collections.IEnumerator)startPickup.Invoke(me.m_interactionHandler, new object[] { dropped, false }));
+            until = Time.realtimeSinceStartup + 4f;
+            while (Time.realtimeSinceStartup < until && me.m_inventory.GetPickupTypeCountInInventory(item) == 0) yield return null;
+            Logger.LogInfo($"use: picked up item {item}, carrying {me.m_inventory.GetPickupTypeCountInInventory(item)}");
+            until = Time.realtimeSinceStartup + 1f;
+            while (Time.realtimeSinceStartup < until) yield return null;
+
+            me.m_weaponHandler.CurrentWeapon = grenade ? Pickup.EquipSlots.ThrowableSlot : Pickup.EquipSlots.WeaponSlot01;
+            until = Time.realtimeSinceStartup + 1.5f;
+            while (Time.realtimeSinceStartup < until) yield return null;
+
+            string burst = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_BURST");
+            float[] delays = (string.IsNullOrEmpty(burst) ? "0.5,3" : burst).Split(',').Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
+            for (int shot = 0; shot < count; shot++)
+            {
+                LogWallProbe("before", wall);
+                if (grenade)
+                {
+                    var stack = me.m_inventory.GetGrenadeInSelectedSlot();
+                    Logger.LogInfo($"use: throwing {(stack.Pickup != null ? stack.Pickup.name : "nothing")} x{stack.Quantity}");
+                    StartCoroutine(me.m_interactionHandler.Throwing());
+                }
+                else
+                {
+                    var gun = me.m_weaponHandler.rightWeapon != null ? me.m_weaponHandler.rightWeapon.gun : null;
+                    if (gun == null)
+                    {
+                        Logger.LogWarning("use: no gun in hand");
+                        yield break;
+                    }
+                    gun.bullets = Mathf.Max(gun.bullets, 1);
+                    Logger.LogInfo($"use: firing {gun.name}");
+                    // The game's own way of giving a shot an exact origin and direction (used for other
+                    // players' shots): the camera alone doesn't turn the weapon in a hidden test window.
+                    Vector3 eye = me.m_playerCamera.transform.position;
+                    Vector3 aim = wall + along * (shot - (count - 1) * 0.5f) * 3.2f + Vector3.up * shot;
+                    var direction = new Landfall.Network.ShootDirectionWrapper(eye + (aim - eye).normalized * 1.5f, Quaternion.LookRotation(aim - eye), int.MaxValue);
+                    me.m_weaponHandler.PressAttack(true, false, null, direction);
+                }
+                float start = Time.realtimeSinceStartup;
+                foreach (float delay in delays)
+                {
+                    while (Time.realtimeSinceStartup - start < delay) yield return null;
+                    yield return new WaitForEndOfFrame();
+                    var tex = ScreenCapture.CaptureScreenshotAsTexture();
+                    string file = $"boom-use-{shot}-{delay.ToString("0.0", CultureInfo.InvariantCulture)}s.png";
+                    File.WriteAllBytes(Path.Combine(Paths.BepInExRootPath, file), ImageConversion.EncodeToPNG(tex));
+                    Destroy(tex);
+                }
+                LogWallProbe("after", wall);
+            }
         }
 
         private bool _gotoDone;
@@ -646,6 +746,7 @@ namespace Tabg.DevAutoJoin
             _sinceJoin += dt;
             TickJumpAndSeat(dt);
             TickGoto();
+            TickUse();
             TickSequence();
             if (!_explodeStarted)
             {

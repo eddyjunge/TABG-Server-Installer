@@ -131,6 +131,8 @@ pub struct RoomSettings {
     pub bot_jump: Option<f32>,
     /// Who sees the bots (and what they're doing) on the radar client mod.
     pub bot_radar: BotRadar,
+    /// Buildings can be blown apart (needs the Destruction client mod).
+    pub destruction: bool,
     /// Checking drops, throws and healing against the tracked inventory.
     pub inventory_check: InventoryCheck,
     /// Ammo item ids. Ammo isn't checked: guns can come loaded, so the server's count drifts.
@@ -204,6 +206,7 @@ impl Default for RoomSettings {
             bots: 0,
             bot_jump: None,
             bot_radar: BotRadar::Off,
+            destruction: true,
             inventory_check: InventoryCheck::Log,
             ammo: std::collections::BTreeSet::new(),
             vehicles: crate::room::VehicleRules {

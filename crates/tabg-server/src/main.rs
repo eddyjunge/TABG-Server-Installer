@@ -88,6 +88,9 @@ struct Args {
     /// Show the bots on the admin-radar client mod: off, admins or everyone.
     #[arg(long, default_value = "off", value_parser = ["off", "admins", "everyone"])]
     bot_radar: String,
+    /// Buildings stay whole, even for players with the Destruction client mod.
+    #[arg(long)]
+    no_destruction: bool,
     /// Check drops, throws and healing against what the server saw a player get:
     /// off, log (report only) or enforce (refuse).
     #[arg(long, default_value = "log", value_parser = ["off", "log", "enforce"])]
@@ -160,6 +163,7 @@ fn main() {
         respawn_minigame: args.respawn_minigame,
         bots: args.bots,
         bot_jump: args.bot_jump,
+        destruction: !args.no_destruction,
         bot_radar: match args.bot_radar.as_str() {
             "admins" => tabg_game::BotRadar::Admins,
             "everyone" => tabg_game::BotRadar::Everyone,

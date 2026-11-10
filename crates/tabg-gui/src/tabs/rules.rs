@@ -281,6 +281,11 @@ fn right(
             changed_tag(ui, d.game.skins != cx.saved.game.skins);
         });
         hint(ui, w, muted("Needs CustomGameSkins"));
+        field(ui, "Destructible buildings", w, |ui| {
+            check(ui, "Destructible buildings", &mut d.game.destruction);
+            changed_tag(ui, d.game.destruction != cx.saved.game.destruction);
+        });
+        hint(ui, w, muted("Needs Destruction"));
         field(ui, "Bot radar", w, |ui| {
             select(
                 ui,

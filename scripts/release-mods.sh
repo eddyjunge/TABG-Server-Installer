@@ -12,7 +12,7 @@ export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 [ -d "$HOME/.dotnet" ] && export PATH="$HOME/.dotnet:$PATH"
 
 # Mods friends can install. Dev tools (DevAutoJoin, WorldDumper) are not part of the catalog.
-MODS=(AdminRadar.Client CoordsDisplay CustomGameSkins.Client CustomGrenades DevTestMap.Client
+MODS=(AdminRadar.Client CoordsDisplay CustomGameSkins.Client CustomGrenades Destruction DevTestMap.Client
       FlyingControls ModSettings PerformanceClient PopupBlocker ProximityChat.Client RangeMap.Client Visuals)
 
 # Visuals embeds the shader bundle that Unity compiles (needs the editor + a licence, see there).

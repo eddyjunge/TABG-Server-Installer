@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <GameRef Include="UnityEngine.ParticleSystemModule" />
+    <GameRef Include="UnityEngine.PhysicsModule" />
+    <GameRef Include="UnityEngine.TerrainModule" />
+    <GameRef Include="UnityEngine.TerrainPhysicsModule" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ModSettings/ModSettings.csproj" Private="false" />
+  </ItemGroup>
+</Project>

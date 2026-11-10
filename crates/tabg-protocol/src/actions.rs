@@ -162,7 +162,9 @@ pub fn encode_item_thrown(
         .i32(item_id)
         .i32(quantity)
         .vec3(position)
-        .vec3(direction);
+        .vec3(direction)
+        // `Pickup.NetworkSyncThis`: the client reads it, and no throwable in the game sets it.
+        .bool(false);
     w.into_inner()
 }
 
@@ -227,7 +229,8 @@ mod tests {
         assert_eq!(ThrowRequest::decode(&t.encode()).unwrap(), t);
         assert_eq!(
             encode_item_thrown(1, 9, 50, 1, [0.0; 3], [0.0; 3]).len(),
-            37
+            38,
+            "the official server's buffer size; the client reads every byte"
         );
         assert_eq!(encode_player_health(1, 65.0).len(), 5);
         assert_eq!(

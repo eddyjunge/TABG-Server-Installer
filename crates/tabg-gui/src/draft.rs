@@ -332,6 +332,11 @@ pub const FIELDS: &[Field] = &[
         get: |c, _| on_off(c.game.skins),
     },
     Field {
+        label: "Destructible buildings",
+        section: Section::Rules,
+        get: |c, _| on_off(c.game.destruction),
+    },
+    Field {
         label: "Bot radar",
         section: Section::Rules,
         get: |c, _| {

@@ -112,6 +112,12 @@ impl Probe {
         )
     }
 
+    /// Send one of our client mods' messages (event codes the game itself doesn't have).
+    pub fn send_raw(&mut self, code: u8, payload: Vec<u8>, reliable: bool) -> Result<(), NetError> {
+        self.host
+            .send(self.server, &Packet { code, payload }.to_wire(), reliable)
+    }
+
     /// Report our own position, like the real client does every frame.
     pub fn move_to(&mut self, position: [f32; 3]) -> Result<(), NetError> {
         let Some(player_index) = self.player_index() else {

@@ -173,6 +173,8 @@ pub struct Game {
     pub bots: u8,
     /// Show the bots on the admin-radar client mod: off, admins, everyone.
     pub bot_radar: BotRadar,
+    /// Buildings can be blown apart with grenades and rockets (destruction client mod).
+    pub destruction: bool,
     /// Check drops, throws and healing against what the server saw a player pick up:
     /// off, log (report in the server log) or enforce (refuse). Ammo is never checked.
     pub inventory_check: InventoryCheck,
@@ -209,6 +211,7 @@ impl Default for Game {
             respawn_minigame: false,
             bots: 0,
             bot_radar: BotRadar::Off,
+            destruction: true,
             inventory_check: InventoryCheck::Log,
             unused_vehicles: 0.0,
             unused_vehicles_max: 15,
@@ -558,6 +561,7 @@ impl ServerToml {
         s.bots = g.bots;
         s.vehicles.unused_chance = g.unused_vehicles;
         s.vehicles.unused_max = usize::from(g.unused_vehicles_max);
+        s.destruction = g.destruction;
         s.bot_radar = match g.bot_radar {
             BotRadar::Off => tabg_game::BotRadar::Off,
             BotRadar::Admins => tabg_game::BotRadar::Admins,

@@ -28,7 +28,7 @@ const fn m(id: &'static str, name: &'static str, key: &'static str, what: &'stat
     }
 }
 
-const MODS: [ModRow; 12] = [
+const MODS: [ModRow; 13] = [
     m(
         "proximity-chat",
         "ProximityChat",
@@ -94,6 +94,12 @@ const MODS: [ModRow; 12] = [
         "PopupBlocker",
         "",
         "Hides anti-cheat popups in the modded copy",
+    ),
+    m(
+        "destruction",
+        "Destruction",
+        "",
+        "Blow buildings apart with grenades and rockets",
     ),
     m(
         "visuals",
@@ -545,6 +551,7 @@ mod tests {
             ("CoordsDisplay", "coords-display"),
             ("CustomGameSkins.Client", "custom-game-skins"),
             ("CustomGrenades", "custom-grenades"),
+            ("Destruction", "destruction"),
             ("DevTestMap.Client", "dev-test-map"),
             ("FlyingControls", "flying-controls"),
             ("ModSettings", "mod-settings"),
@@ -556,6 +563,6 @@ mod tests {
         ] {
             assert!(MODS.iter().any(|m| m.id == id), "{name}: {id}");
         }
-        assert_eq!(MODS.len(), 12);
+        assert_eq!(MODS.len(), 13);
     }
 }

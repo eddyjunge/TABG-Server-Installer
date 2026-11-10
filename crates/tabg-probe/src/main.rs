@@ -27,6 +27,9 @@ struct Args {
     /// Radius of the circle, in metres.
     #[arg(long, default_value_t = 1.0)]
     radius: f32,
+    /// Say hello to the destruction relay (event 246) and report the blasts we are sent.
+    #[arg(long)]
+    destruction: bool,
     /// Attack this player index: after --hit-at seconds, report a hit that leaves them at 40
     /// health, and 8 s later a lethal one (exercises damage, death and the end of the match).
     #[arg(long)]
@@ -88,6 +91,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             w.phase
         );
     }
+    if args.destruction {
+        probe.send_raw(246, b"DSTR\x01\x01".to_vec(), true)?;
+    }
     let start = args
         .around
         .or(probe.seen.world.as_ref().map(|w| w.position));
@@ -120,6 +126,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         probe.pump(Duration::from_millis(33))?;
+    }
+
+    if args.destruction {
+        let reply = |op: u8| probe.seen.payloads.iter().filter(|(c, p)| *c == 246 && p.get(5) == Some(&op)).count();
+        println!("destruction: accepted {}, denied {}", reply(2), reply(3));
+        for (_, p) in probe.seen.payloads.iter().filter(|(c, p)| *c == 246 && p.get(5) == Some(&5)) {
+            let f = |at: usize| f32::from_le_bytes([p[at], p[at + 1], p[at + 2], p[at + 3]]);
+            let seq = u32::from_le_bytes([p[6], p[7], p[8], p[9]]);
+            println!("destruction: blast {seq} at ({:.2}, {:.2}, {:.2}) radius {} power {}", f(10), f(14), f(18), f(22), f(26));
+        }
     }
 
     let mut counts: BTreeMap<u8, (usize, usize)> = BTreeMap::new();

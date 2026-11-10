@@ -47,6 +47,7 @@ mod console;
 mod extras;
 mod inventory;
 mod maps;
+mod destruction;
 mod radar;
 mod skins;
 mod taxi;
@@ -223,6 +224,7 @@ pub struct Room {
     skins_authorized: Vec<u8>,
     /// Peers whose radar mod said hello.
     radar_watchers: Vec<u8>,
+    destruction: destruction::DestructionState,
     vehicles: vehicles::VehicleState,
     combat: vehicle_combat::CombatState,
     taxis: taxi::TaxiState,
@@ -264,6 +266,7 @@ impl Room {
             match_started_at: 0.0,
             skins_authorized: Vec::new(),
             radar_watchers: Vec::new(),
+            destruction: Default::default(),
             vehicles: Default::default(),
             combat: Default::default(),
             taxis: Default::default(),
@@ -348,6 +351,7 @@ impl Room {
         self.pending.retain(|&p| p != peer);
         self.skins_authorized.retain(|&p| p != peer);
         self.radar_watchers.retain(|&p| p != peer);
+        self.destruction_forget(peer);
         self.forget_vehicle_client(peer);
         self.eject(peer);
         // Leaving mid-match drops your loot, like dying (official `PlayerLeaveCommand`).
@@ -387,6 +391,9 @@ impl Room {
         }
         if packet.code == radar::RADAR {
             return self.radar_hello(peer, &packet.payload);
+        }
+        if packet.code == destruction::DESTRUCTION {
+            return self.destruction_message(peer, &packet.payload);
         }
         if packet.code == vehicles::VEHICLES {
             return self.vehicle_message(peer, &packet.payload);
@@ -2161,6 +2168,7 @@ impl Room {
         self.next_drop_at = None;
         self.match_started_at = now;
         self.bots_board();
+        self.destruction.reset_pending = true;
         let (modifier, loot) =
             LootWorld::spawn(&self.settings.loot, self.settings.loot_keep, &mut self.rng);
         self.modifier = modifier;
@@ -2237,6 +2245,7 @@ impl Room {
         self.countdown_left = 0.0;
         self.ring = Ring::new(self.settings.ring.clone(), &mut self.rng);
         self.spawn_cars();
+        self.destruction.reset_pending = true;
     }
 
     /// Advance to `now` (seconds since the room started): run the match, and at the tick rate send
@@ -2247,6 +2256,7 @@ impl Room {
         let mut out = self.tick_match(now, dt);
         out.extend(self.tick_bots(now, dt));
         out.extend(self.tick_radar(now));
+        out.extend(self.tick_destruction());
         if self.state == game_state::STARTED {
             out.extend(self.tick_aircraft(now, dt));
             out.extend(self.tick_missiles(now, dt));
