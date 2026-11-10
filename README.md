@@ -180,6 +180,27 @@ Admins are set on the Players page or with `tabg admins add <name>`. These comma
 | `/vehicles` · `/vehicle <name>` | List vehicles, or spawn one in front of you (FlyingControls players) |
 | `/fpv` | Get an FPV drone |
 
+### Command Line
+
+Every command talks to the running host, so they also work while the window is open.
+
+| Command | What it does |
+|---|---|
+| `tabg` / `tabg gui` | Open the window |
+| `tabg host [--no-browser]` | Run the host without a window and open the browser dashboard |
+| `tabg setup [--force]` | Find TABG and export the map data |
+| `tabg start` · `stop` · `restart` | Control the game server |
+| `tabg status` | Join code, phase and players |
+| `tabg console` | Type admin commands |
+| `tabg say` · `kick` · `ban` · `unban` | Talk to or moderate players |
+| `tabg admins [add\|remove <name>]` | Manage admins |
+| `tabg config show\|get\|set\|path` | Read or change `tabg.toml` |
+| `tabg preset list\|apply\|save` | Built-in and your own presets |
+| `tabg backup list\|restore <id>` | Config backups |
+| `tabg logs [-n 50] [-f]` | Server log |
+| `tabg share` | Make the share code for friends |
+| `tabg join <code> [--launch]` · `tabg launch` | Get ready for a friend's server, start the modded copy |
+
 ## Client Mods
 
 All of them are optional. Friends get them through the share code, never by hand.
@@ -197,8 +218,8 @@ All of them are optional. Friends get them through the share code, never by hand
 | ModSettings | `mod-settings` | In-game settings for the other mods | F9 |
 | PerformanceClient | `performance-client` | FPS, culling, streaming and network optimizations, with a frame-time overlay | F10 |
 | PopupBlocker | `popup-blocker` | Hides the anti-cheat popups in the modded copy | |
-| Destruction | `destruction` | Grenades and rockets break buildings where they hit, and whatever loses its support comes down. Everyone with the mod sees the same holes, also if they join later. Needs everyone to have it; hosts can turn it off (`game.destruction`) | |
-| Visuals | `visuals` | Graphics upgrade on top of TABG's own look: sharper soft shadows, stronger AO, volumetric sunlight through trees and buildings, volumetric clouds in place of the painted ones, real 3D smoke from smoke grenades, soft lingering smoke and dust after blasts and a faint haze in grenade fields, flashbangs that burn the view into your eyes, weather that follows the biome (snow and fog in the snow, rain and storms on grass, sandstorms in the desert), a livelier sea (foam, colour, sun glow), explosions that light up their surroundings and glow, plus a gentle colour grade, sky gradient, haze, sun rays and sharpening; every part has a setting | F8 |
+| Destruction | `destruction` | Grenades and rockets break buildings (see [Destruction](#destruction)) | |
+| Visuals | `visuals` | Better lighting, clouds, smoke, weather and sea (see [Visuals](#visuals)) | F8 |
 
 ## Proximity Voice Chat
 
@@ -247,6 +268,31 @@ each outfit, limits how often it can change, and shows it to everyone as normal 
 It doesn't buy anything, doesn't change your PlayFab inventory or saved outfit, and stays locked on
 servers that haven't enabled it.
 
+## Destruction
+
+Grenades and rockets break buildings where they hit, and whatever loses its support comes down.
+
+- Clients report blasts (event 246). The server merges reports of the same blast, keeps one ordered
+  log for the match and sends it to everyone. Each client breaks the buildings the same way from
+  that log, so all players with the mod see the same holes, also if they join later.
+- Everyone on the server should have the mod: add `destruction` to the client mods. Hosts can turn
+  it off with `game.destruction = false` (it's on by default).
+
+## Visuals
+
+A client-side graphics upgrade on top of TABG's own look. It changes nothing on the server and
+nothing other players see, and every part has a setting in the **F8** menu.
+
+| Part | What it does |
+|---|---|
+| Light | Sharper soft shadows, stronger ambient occlusion, volumetric sunlight through trees and buildings, sun rays |
+| Sky | Volumetric clouds in place of the painted ones, a softer sky gradient and haze |
+| Weather | Follows the biome: snow and fog in the snow, rain and storms on grass, sandstorms in the desert |
+| Smoke | Real 3D smoke from smoke grenades, lingering smoke and dust after blasts, a faint haze in grenade fields |
+| Explosions | Light up their surroundings, with bloom and glow; flashbangs burn the view into your eyes |
+| Sea | Foam, richer colour and the sun glowing through the waves |
+| Image | A gentle colour grade and sharpening |
+
 ## Configuration
 
 Each server is one `tabg.toml`. The window, the dashboard and the CLI all edit it, and lobby rules reload
@@ -277,9 +323,13 @@ mode = "battle_royale"
 map = "island"
 teams = "squad"
 max_players = 70
+password = ""                # empty: no password
 players_to_start = 2
 bots = 0
+bot_radar = "off"            # "off", "admins" or "everyone" (AdminRadar mod)
 voice_range = 50.0
+skins = false                # all built-in skins (CustomGameSkins mod)
+destruction = true           # buildings break (Destruction mod)
 unused_vehicles = 0.0
 inventory_check = "log"      # "off", "log" (report in the console) or "enforce" (refuse)
 
@@ -324,6 +374,10 @@ dotnet build mods/Mods.sln -c Release
 scripts/release-mods.sh                  # mod catalog into target/mods-dist/
 ```
 
+The Visuals mod embeds shaders built with the same Unity version TABG uses (2021.3.45f2).
+`scripts/build-shaders.sh` downloads that editor once (about 4 GB) and builds the asset bundles
+headless into `target/bundles/`. Unity needs a free Personal licence, signed in once with Unity Hub.
+
 Game, Unity and BepInEx assemblies are never committed. The mods compile against your own install.
 
 There is no CI. Run all checks locally before pushing:
@@ -340,6 +394,15 @@ cargo run --release -p tabg-server -- --world target/tabg-world.json   # just th
 cargo run --release -p tabg-probe -- --host 127.0.0.1                  # headless test client
 scripts/reference-server.sh <dedicated-server-dir>  # Landfall's server, offline, as ground truth
 scripts/real-client-test.sh                         # the real client joins automatically
+scripts/dump-world.sh <dedicated-server-dir>        # export the map data by hand
+```
+
+For writing mods, these unpack your own install into `target/` (never commit or share the output):
+
+```bash
+scripts/decompile.sh [client|server|both]           # game code as C# projects
+scripts/extract-assets.sh [client|server] [unity|content|sounds|shaders|all]
+                                                    # UI, prefabs, models, textures, sounds, shaders
 ```
 
 The design, all decisions and the milestones are in [docs/DESIGN.md](docs/DESIGN.md).
@@ -349,7 +412,7 @@ The design, all decisions and the milestones are in [docs/DESIGN.md](docs/DESIGN
 ```
 crates/   Rust workspace: tabg (CLI), tabg-gui (window), tabg-host, tabg-web (dashboard), tabg-server and
           tabg-game (the game server), tabg-protocol, tabg-net, tabg-utp (relay), tabg-world
-mods/     C# BepInEx client mods and the map dumper
+mods/     C# BepInEx client mods and the map dumper; mods/unity is the Unity project for mod shaders
 presets/  built-in presets
 scripts/  build, release and test scripts
 docs/     design
@@ -383,6 +446,16 @@ This software is provided **as-is** with no warranty of any kind. Use at your ow
 | [BepInEx](https://github.com/BepInEx/BepInEx) 5.4.23.3 | BepInEx Team | Mod loader for the modded client copy and the map export |
 | [HarmonyLib](https://github.com/pardeike/Harmony) | Andreas Pardeike | Runtime patching, bundled with BepInEx |
 | [AntiCheatBootErrorRemover](https://github.com/C0mputery/AntiCheatBootErrorRemover) 1.0 | [C0mputery](https://github.com/C0mputery) | Lets the modded copy start without Easy Anti-Cheat |
+
+### Developer Tools (used by the scripts, never shipped)
+
+| Component | Author | Use |
+|---|---|---|
+| [Unity](https://unity.com/) 2021.3.45f2 | Unity Technologies | Builds the Visuals shaders (`build-shaders.sh`) |
+| [AssetRipper](https://github.com/AssetRipper/AssetRipper) | AssetRipper contributors | Asset extraction (GPL-3.0) |
+| [vgmstream](https://github.com/vgmstream/vgmstream) | vgmstream contributors | FMOD sound banks to wav (ISC) |
+| [USCSandbox](https://github.com/nesrak1/USCSandbox) | nesrak1 | Shader decompiler, with our patch (GPL-3.0) |
+| [ILSpy](https://github.com/icsharpcode/ILSpy) | ICSharpCode | Decompiling the game code (MIT) |
 
 ### Thanks
 
