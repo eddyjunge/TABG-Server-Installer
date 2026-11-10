@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build release binaries of tabg for Linux and Windows into target/dist/, with the map dumper
 # plugin embedded. Local only (no CI): needs the .NET SDK and TABG_CLIENT_DIR for the plugin, and
-# zig + cargo-zigbuild for the Windows cross build (`cargo install cargo-zigbuild`).
+# zig + cargo-zigbuild for the Windows cross build and the portable Linux build (`cargo install cargo-zigbuild`).
 #
 #   scripts/build-release.sh
 set -euo pipefail
@@ -19,7 +19,9 @@ VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import sys,j
 DIST=target/dist
 rm -rf "$DIST"; mkdir -p "$DIST"
 
-cargo build --release -p tabg --target x86_64-unknown-linux-gnu
+# Linked against glibc 2.31 (zig), so it runs on older distros too (Ubuntu 20.04+, Debian 11+),
+# not only on the glibc of the build machine.
+cargo zigbuild --release -p tabg --target x86_64-unknown-linux-gnu.2.31
 cp target/x86_64-unknown-linux-gnu/release/tabg "$DIST/tabg-$VERSION-linux-x86_64"
 
 cargo zigbuild --release -p tabg --target x86_64-pc-windows-gnu

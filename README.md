@@ -51,9 +51,9 @@ the shooting range, friends run `tabg join <code>` once and get exactly the mods
 
 1. Go to the [latest release](https://github.com/jonassneu/TABG-Server-Installer/releases/latest).
 2. Download `tabg-<version>-windows-x86_64.exe` or `tabg-<version>-linux-x86_64`.
-3. Put it anywhere and run it. It's one file of about 20 MB with nothing to install.
+3. Put it anywhere and run it. It's one file with nothing to install.
 
-No release exists yet for the rewrite. Until one does, [build it yourself](#building).
+Or [build it yourself](#building).
 
 ## Quick Start
 
