@@ -3,7 +3,8 @@
 # target/mods-dist/catalog.json + Tabg.<Mod>-<version>.dll, all sha256-pinned.
 #
 #   scripts/release-mods.sh            build only (test with TABG_MOD_CATALOG=target/mods-dist/catalog.json)
-#   scripts/release-mods.sh --upload   also upload to the "mods" GitHub release (gh CLI)
+#   scripts/release-mods.sh --upload   also upload new files and the catalog to the "mods" GitHub release (gh CLI);
+#                                      released files are never replaced, so bump a mod's version to ship it
 #
 # Needs the .NET SDK and TABG_CLIENT_DIR (see mods/Local.props.example).
 set -euo pipefail
@@ -52,5 +53,26 @@ python3 -c 'import json,sys; [print(e["id"].ljust(20), e["version"].ljust(8), e[
 
 if [[ "${1:-}" == "--upload" ]]; then
   gh release view mods >/dev/null 2>&1 || gh release create mods --title "Client mods" --notes "Client mods for tabg share codes. tabg pins every file by sha256."
-  gh release upload mods "$OUT"/*.dll "$OUT/catalog.json" --clobber
+  # Share codes pin each file's sha256, and builds aren't byte-for-byte reproducible: a file that is
+  # already released is never replaced (bump the mod's version to ship a change). The catalog keeps
+  # the released entries for those and adds the new ones.
+  gh release download mods -p catalog.json -O "$OUT/released.json" --clobber 2>/dev/null || echo '[]' > "$OUT/released.json"
+  new=$(python3 -I - "$OUT/released.json" "$OUT/catalog.json" <<'PY'
+import json, sys
+released = json.load(open(sys.argv[1]))
+have = {e["file"]: e for e in released}
+built = json.load(open(sys.argv[2]))
+merged = [have.get(e["file"], e) for e in built]
+json.dump(merged, open(sys.argv[2], "w"), indent=4)
+print(" ".join(e["file"] for e in built if e["file"] not in have))
+PY
+)
+  rm "$OUT/released.json"
+  if [[ -n "$new" ]]; then
+    echo "uploading: $new"
+    (cd "$OUT" && gh release upload mods $new)
+  else
+    echo "no new mod files"
+  fi
+  gh release upload mods "$OUT/catalog.json" --clobber
 fi
