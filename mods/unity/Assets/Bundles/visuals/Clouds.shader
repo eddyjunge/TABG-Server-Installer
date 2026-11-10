@@ -5,7 +5,7 @@
 // A slab of air between _CloudLayer.x and _CloudLayer.y (world height) holds the clouds:
 // a large-scale 2D coverage noise decides where clouds are, a 3D detail noise erodes their edges,
 // and a height profile gives flat bottoms and puffy tops. Each view ray is marched through the
-// slab (dithered), with two samples toward the sun for self-shadowing, a "powder" term so edges
+// slab on fixed height layers (dithered, then blurred), with two samples toward the sun for self-shadowing, a "powder" term so edges
 // glow and insides stay soft, and Henyey-Greenstein forward scattering for the silver lining.
 Shader "Hidden/TabgVisuals/Clouds"
 {
@@ -74,7 +74,7 @@ Shader "Hidden/TabgVisuals/Clouds"
                 return v;
             }
 
-            float Density(float3 p, bool detail)
+            float Density(float3 p, bool detail, float detailAmount)
             {
                 float h = saturate((p.y - _CloudLayer.x) / (_CloudLayer.y - _CloudLayer.x));
                 // Flat bottoms, rounded tops.
@@ -86,8 +86,8 @@ Shader "Hidden/TabgVisuals/Clouds"
                 float shape = (coverage - (1.0 - _CloudLayer.z)) / max(0.05, _CloudLayer.z);
                 shape = saturate(shape + (billow - 0.5) * 0.9) * profile;
                 if (shape <= 0.0) return 0.0;
-                if (detail)
-                    shape -= (Fbm(q * 5.0, 2) - 0.4) * 0.45 * (1.0 - shape);
+                if (detail && detailAmount > 0.0)
+                    shape -= (Fbm(q * 5.0, 2) - 0.4) * 0.45 * (1.0 - shape) * detailAmount;
                 return saturate(shape * 2.6 - 0.3) * _CloudLayer.w;
             }
 
@@ -112,10 +112,18 @@ Shader "Hidden/TabgVisuals/Clouds"
                 t1 = min(t1, t0 + 6000.0);           // don't march to the end of the world
                 if (t0 > 30000.0) return 0;
 
+                // Samples on fixed heights (layers of the slab), not at fractions of each ray: when the view
+                // moves, every ray keeps sampling the same world layers, so the clouds don't crawl.
                 int steps = (int)_CloudShape.w;
-                float dt = (t1 - t0) / steps;
+                float dy = (_CloudLayer.y - _CloudLayer.x) / max(1, steps);
+                float dir = rd.y > 0.0 ? 1.0 : -1.0;
+                float y0 = ro.y + rd.y * t0;
+                float first = dir > 0.0 ? floor(y0 / dy) : ceil(y0 / dy);
+                float dt = dy / abs(rd.y);
                 float2 px = i.uv * _ScreenParams.xy;
                 float jitter = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
+                // Fine detail only where it is larger than the steps that sample it.
+                float detail = 1.0 - smoothstep(2500.0, 9000.0, t0);
 
                 float cosT = dot(rd, _SunDir.xyz);
                 float phase = lerp(Phase(cosT, 0.6), Phase(cosT, -0.2), 0.3) * 4.0 * UNITY_PI;
@@ -124,16 +132,19 @@ Shader "Hidden/TabgVisuals/Clouds"
                 float T = 1.0;
                 float3 col = 0;
                 [loop]
-                for (int k = 0; k < 48; k++)
+                for (int k = 0; k < 64; k++)
                 {
-                    if (k >= steps || T < 0.02) break;
-                    float3 p = ro + rd * (t0 + (k + jitter) * dt);
-                    float d = Density(p, true);
+                    if (T < 0.02) break;
+                    float t = ((first + dir * (k + jitter)) * dy - ro.y) / rd.y;
+                    if (t < t0) continue;
+                    if (t > t1) break;
+                    float3 p = ro + rd * t;
+                    float d = Density(p, true, detail);
                     if (d <= 0.001) continue;
 
                     // Two samples toward the sun for self-shadowing.
-                    float ld = Density(p + _SunDir.xyz * lightStep, false)
-                             + Density(p + _SunDir.xyz * lightStep * 2.5, false);
+                    float ld = Density(p + _SunDir.xyz * lightStep, false, 0.0)
+                             + Density(p + _SunDir.xyz * lightStep * 2.5, false, 0.0);
                     float sunT = exp(-ld * lightStep * 0.02);
                     float powder = 1.0 - exp(-d * dt * 0.03);
                     float h = saturate((p.y - _CloudLayer.x) / (_CloudLayer.y - _CloudLayer.x));
@@ -151,6 +162,28 @@ Shader "Hidden/TabgVisuals/Clouds"
                 // Fade toward the horizon, where the slab gets paper-thin and aliases.
                 float horizon = smoothstep(0.0, 0.08, abs(rd.y)) * (1.0 - smoothstep(12000.0, 30000.0, t0));
                 return float4(col * horizon, alpha * horizon);
+            }
+            ENDCG
+        }
+
+        // 1: small separable blur (removes the dither), premultiplied RGBA
+        Pass
+        {
+            CGPROGRAM
+            #pragma vertex vert_img
+            #pragma fragment frag
+            #pragma target 3.0
+            #include "UnityCG.cginc"
+
+            sampler2D _MainTex;
+            float4 _BlurDir;
+
+            float4 frag(v2f_img i) : SV_Target
+            {
+                float2 d = _BlurDir.xy;
+                return tex2D(_MainTex, i.uv) * 0.4
+                     + (tex2D(_MainTex, i.uv + d) + tex2D(_MainTex, i.uv - d)) * 0.24
+                     + (tex2D(_MainTex, i.uv + d * 2.0) + tex2D(_MainTex, i.uv - d * 2.0)) * 0.06;
             }
             ENDCG
         }

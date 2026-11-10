@@ -76,14 +76,14 @@ namespace TabgInstaller.Visuals
             Enabled = Config.Bind("General", "Enabled", true, "Apply the visuals effect");
             ToggleKey = Config.Bind("General", "ToggleKey", KeyCode.F8, "Key to switch the effect on/off (to compare)");
 
-            Warmth = Config.Bind("Grade", "Warmth", 0.5f, Range("Warm sunlit highlights, cool blue shadows", 0f, 1.5f));
-            Saturation = Config.Bind("Grade", "Saturation", 0f, Range("Richer colours everywhere", -0.5f, 0.6f));
-            Vibrance = Config.Bind("Grade", "Vibrance", 0.1f, Range("Lifts dull colours more than bright ones", -0.5f, 0.8f));
-            Contrast = Config.Bind("Grade", "Contrast", 0.25f, Range("Soft S-curve: deeper shadows, brighter highlights", 0f, 1f));
+            Warmth = Config.Bind("Grade", "Warmth", 0.3f, Range("Warm sunlit highlights, cool blue shadows", 0f, 1.5f));
+            Saturation = Config.Bind("Grade", "Saturation", -0.08f, Range("Richer colours everywhere", -0.5f, 0.6f));
+            Vibrance = Config.Bind("Grade", "Vibrance", 0f, Range("Lifts dull colours more than bright ones", -0.5f, 0.8f));
+            Contrast = Config.Bind("Grade", "Contrast", 0.2f, Range("Soft S-curve: deeper shadows, brighter highlights", 0f, 1f));
             Haze = Config.Bind("Atmosphere", "Haze", 0.45f, Range("Blue-lavender haze over distant terrain, warm toward the sun", 0f, 1f));
             HazeStart = Config.Bind("Atmosphere", "HazeStart", 25f, Range("Distance (m) where the haze begins", 0f, 300f));
             HazeDistance = Config.Bind("Atmosphere", "HazeDistance", 450f, Range("How far (m) until the haze is two-thirds thick", 50f, 3000f));
-            SkyDepth = Config.Bind("Atmosphere", "SkyDepth", 0.45f, Range("Deeper blue sky overhead, light at the horizon", 0f, 1f));
+            SkyDepth = Config.Bind("Atmosphere", "SkyDepth", 0.35f, Range("Deeper blue sky overhead, light at the horizon", 0f, 1f));
             SunRays = Config.Bind("Atmosphere", "SunRays", 0.8f, Range("Light shafts and glow around the sun (screen space)", 0f, 2f));
             VolumetricLight = Config.Bind("Atmosphere", "VolumetricLight", 0.4f, Range("Sunlight in the air, shadowed by trees and buildings (0 = off)", 0f, 2f));
             VolumetricSteps = Config.Bind("Atmosphere", "VolumetricSteps", 24, new ConfigDescription(
@@ -98,7 +98,7 @@ namespace TabgInstaller.Visuals
             Sharpen = Config.Bind("Detail", "Sharpen", 0.25f, Range("Contrast-adaptive sharpening (0 = off)", 0f, 1f));
             ExplosionGlowStrength = Config.Bind("Explosions", "Glow", 1f, Range("Light flash, bloom and glow for explosions (0 = off)", 0f, 2f));
             RealisticFlashbang = Config.Bind("Explosions", "RealisticFlashbang", true, "Flashbangs burn the view into your eyes and vision returns blurred (same blind time as the game)");
-            VolumetricSmoke = Config.Bind("Explosions", "VolumetricSmoke", true, "Smoke grenades become real 3D smoke, lit by the sun (same size and duration as the game's)");
+            VolumetricSmoke = Config.Bind("Explosions", "VolumetricSmoke", true, "Smoke grenades become real 3D smoke, lit by the sun (same duration as the game's, 2-4x as big)");
             SmokeSteps = Config.Bind("Explosions", "SmokeSteps", 32, new ConfigDescription(
                 "Samples per pixel for smoke (quality vs speed)", new AcceptableValueRange<int>(12, 64)));
             GrenadeEffects = Config.Bind("Explosions", "GrenadeEffects", true, "Soft lingering smoke and dust after blasts and a faint haze in fields, on top of the game's own effects");
@@ -113,7 +113,7 @@ namespace TabgInstaller.Visuals
             BetterAO = Config.Bind("Quality", "BetterAO", true,
                 "Stronger, smoother ambient occlusion when the game's AO option is on");
             AOStrength = Config.Bind("Quality", "AOStrength", 0.7f, Range("Ambient occlusion strength (game default 0.3)", 0f, 1.5f));
-            InkStrength = Config.Bind("Ink", "Strength", 0.3f, Range("Outlines around objects (0 = off)", 0f, 1f));
+            InkStrength = Config.Bind("Ink", "Strength", 0f, Range("Outlines around objects (0 = off)", 0f, 1f));
             InkWidth = Config.Bind("Ink", "Width", 1.5f, Range("Line width in pixels at 1080p", 1f, 4f));
             InkDarken = Config.Bind("Ink", "Darkness", 0.45f, Range("Line colour: 0 = black, 1 = invisible", 0f, 1f));
             InkSensitivity = Config.Bind("Ink", "Sensitivity", 30f, Range("How small an edge or crease still gets a line", 1f, 200f));
@@ -122,6 +122,8 @@ namespace TabgInstaller.Visuals
             DebugView = Config.Bind("Debug", "View", 0, new ConfigDescription(
                 "0 normal, 1 outline mask, 2 depth, 3 passthrough, 4 sun rays, 5 distance (red = sky), 6 volumetric light, 7 clouds, 8 explosion glow, 9 smoke",
                 new AcceptableValueRange<int>(0, 9)));
+
+            MigrateDefaults();
 
             const string cat = "Visuals";
             ModSettings.ModSettingsUI.Register(cat, "Enabled", "Apply the visuals effect", Enabled);
@@ -171,6 +173,32 @@ namespace TabgInstaller.Visuals
             Enabled.SettingChanged += (_, __) => { Quality.Apply(); Ocean.Apply(Enabled.Value && Water.Value); ApplyClouds(); };
             Clouds.SettingChanged += (_, __) => ApplyClouds();
             Water.SettingChanged += (_, __) => Ocean.Apply(Enabled.Value && Water.Value);
+        }
+
+        /// <summary>
+        /// Moves settings still at an old default to the new one (a config file keeps every value it was
+        /// written with, so changed defaults would otherwise never reach existing installs).
+        /// </summary>
+        private void MigrateDefaults()
+        {
+            var version = Config.Bind("General", "ConfigVersion", 1, "Settings format (do not edit)");
+            if (version.Value >= 3) return;
+            void Move(ConfigEntry<float> e, float old)
+            {
+                if (Mathf.Abs(e.Value - old) < 1e-4f) e.Value = (float)e.DefaultValue;
+            }
+            if (version.Value < 2)
+            {
+                // 2: less saturated grade.
+                Move(Warmth, 0.5f);
+                Move(Saturation, 0f);
+                Move(Vibrance, 0.1f);
+                Move(Contrast, 0.25f);
+                Move(SkyDepth, 0.45f);
+            }
+            // 3: no outlines by default.
+            Move(InkStrength, 0.3f);
+            version.Value = 3;
         }
 
         private void LoadMaterials()

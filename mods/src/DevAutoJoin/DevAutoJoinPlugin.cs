@@ -43,6 +43,10 @@ namespace Tabg.DevAutoJoin
     ///   TABG_AUTOJOIN_USE    "gun|grenade:item@seconds,count": at the TABG_AUTOJOIN_TARGET building, /give the item (needs
     ///                        admin), pick it up, and really fire it (magazine topped up) or throw it, `count` times
     ///                        (boom-use-*.png)
+    ///   TABG_AUTOJOIN_SET    "guid/Section/Key=value|..." settings to apply once joined (kept, unlike COMPARE)
+    ///   TABG_AUTOJOIN_CLIP   "start,seconds,sway,period,pitch[,strafe]": from `start` s after joining, sway the view
+    ///                        `sway` degrees left and right every `period` s at `pitch` (and `strafe` metres sideways),
+    ///                        saving every frame (clip-NNNN.jpg)
     ///   TABG_AUTOJOIN_FPS    frame cap, and keeps running when unfocused (for a hidden test window)
     ///   TABG_AUTOJOIN_COMPARE "plugin.guid/Section/Key": every screenshot is taken once per value, a few
     ///                        frames apart: off/on for a bool, or "...Key=v1,v2" (files -off/-on or -v1/-v2)
@@ -477,8 +481,75 @@ namespace Tabg.DevAutoJoin
             return true;
         }
 
+        private bool _clipDone, _clipping;
+        private float _clipYaw, _clipPitch, _clipAmplitude, _clipPeriod, _clipStart, _clipStrafe;
+        private Vector3 _clipOffset;
+
+        /// <summary>TABG_AUTOJOIN_SET at join, then TABG_AUTOJOIN_CLIP: sway the view and save every frame.</summary>
+        private void TickClip()
+        {
+            if (_clipDone) return;
+            string clip = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_CLIP");
+            if (string.IsNullOrEmpty(clip)) { _clipDone = true; return; }
+            string[] a = clip.Split(',');
+            float F(int i, float d) => a.Length > i ? float.Parse(a[i], CultureInfo.InvariantCulture) : d;
+            if (_sinceJoin < F(0, 40f) || Player.localPlayer == null || Player.localPlayer.m_playerCamera == null) return;
+            _clipDone = true;
+            StartCoroutine(Clip(F(1, 8f), F(2, 40f), F(3, 8f), F(4, 0f), F(5, 0f)));
+        }
+
+        private void ApplySettings()
+        {
+            string set = Environment.GetEnvironmentVariable("TABG_AUTOJOIN_SET");
+            if (string.IsNullOrEmpty(set)) return;
+            foreach (string item in set.Split('|'))
+            {
+                string[] kv = item.Split(new[] { '=' }, 2);
+                var entry = FindSetting(kv[0]);
+                if (entry == null) { Logger.LogWarning($"set: no setting {kv[0]}"); continue; }
+                entry.SetSerializedValue(kv[1]);
+                Logger.LogInfo($"set: {kv[0]} = {kv[1]}");
+            }
+        }
+
+        private System.Collections.IEnumerator Clip(float seconds, float amplitude, float period, float pitch, float strafe)
+        {
+            Transform cam = Player.localPlayer.m_playerCamera.transform;
+            _clipYaw = cam.eulerAngles.y;
+            _clipPitch = pitch;
+            _clipAmplitude = amplitude;
+            _clipPeriod = Mathf.Max(0.5f, period);
+            _clipStrafe = strafe;
+            _clipOffset = Vector3.zero;
+            _clipStart = Time.realtimeSinceStartup;
+            _clipping = true;
+            int frame = 0;
+            Logger.LogInfo($"clip: {seconds} s, sway {amplitude} deg every {period} s, pitch {pitch}");
+            while (Time.realtimeSinceStartup - _clipStart < seconds)
+            {
+                yield return new WaitForEndOfFrame();
+                var tex = ScreenCapture.CaptureScreenshotAsTexture();
+                File.WriteAllBytes(Path.Combine(Paths.BepInExRootPath, $"clip-{frame++:0000}.jpg"), ImageConversion.EncodeToJPG(tex, 92));
+                Destroy(tex);
+            }
+            _clipping = false;
+            Logger.LogInfo($"clip: {frame} frames");
+        }
+
         private void LateUpdate()
         {
+            if (_clipping && Player.localPlayer != null && Player.localPlayer.m_playerCamera != null)
+            {
+                float t = Time.realtimeSinceStartup - _clipStart;
+                float yaw = _clipYaw + _clipAmplitude * Mathf.Sin(t / _clipPeriod * Mathf.PI * 2f);
+                Transform view = Player.localPlayer.m_playerCamera.transform;
+                view.rotation = Quaternion.Euler(_clipPitch, yaw, 0f);
+                // Walk the view sideways and back (the camera only; the player stays put).
+                Vector3 offset = Quaternion.Euler(0f, _clipYaw, 0f) * Vector3.right * (_clipStrafe * Mathf.Sin(t / (_clipPeriod * 0.7f) * Mathf.PI * 2f));
+                view.position += offset - _clipOffset;
+                _clipOffset = offset;
+                return;
+            }
             if (!_lookingAt || Player.localPlayer == null || Player.localPlayer.m_playerCamera == null)
                 return;
             Transform cam = Player.localPlayer.m_playerCamera.transform;
@@ -729,6 +800,7 @@ namespace Tabg.DevAutoJoin
                 }
 
                 _sinceJoin = 0f;
+                ApplySettings();
                 if (_target.StartsWith("code:", StringComparison.Ordinal))
                 {
                     string code = _target.Substring("code:".Length);
@@ -747,6 +819,7 @@ namespace Tabg.DevAutoJoin
             TickJumpAndSeat(dt);
             TickGoto();
             TickUse();
+            TickClip();
             TickSequence();
             if (!_explodeStarted)
             {

@@ -35,10 +35,10 @@ Shader "Hidden/TabgVisuals/Smoke"
             float4 _AmbientTop;
             float4 _AmbientBottom;
             float4 _SmokePos[8];        // xyz centre, w horizontal radius
-            float4 _SmokeInfo[8];       // x vertical radius, y density 0..1
+            float4 _SmokeInfo[8];       // x vertical radius, y density 0..1, z extinction (1/m at full density)
             float4 _SmokeColor[8];      // rgb albedo
             float4 _SmokeEmit[8];       // rgb glow, a: 0 = hot core, 1 = glowing rim
-            // x: count, y: steps, z: size of one noise tile (m), w: extinction (1/m at full density)
+            // x: count, y: steps, z: size of one noise tile (m)
             float4 _SmokeParams;
             sampler3D _SmokeNoise;
             UNITY_DECLARE_DEPTH_TEXTURE(_CameraDepthTexture);
@@ -54,6 +54,7 @@ Shader "Hidden/TabgVisuals/Smoke"
             }
 
             static float3 g_Emission;   // set by the detailed density samples
+            static float g_Sigma;       // extinction at this point, from the smokes it is in
 
             float Density(float3 p, bool detail, out float3 albedo)
             {
@@ -68,6 +69,7 @@ Shader "Hidden/TabgVisuals/Smoke"
                 float3 tint = 0;
                 float3 glow = 0;
                 float shell = 0;
+                float sigma = 0;
                 for (int k = 0; k < 8; k++)
                 {
                     if (k >= (int)_SmokeParams.x) break;
@@ -80,9 +82,11 @@ Shader "Hidden/TabgVisuals/Smoke"
                     tint += f * _SmokeColor[k].rgb;
                     glow += f * _SmokeEmit[k].rgb;
                     shell += f * _SmokeEmit[k].a;
+                    sigma += f * _SmokeInfo[k].z;
                 }
                 if (sum <= 1e-3) return 0;
                 albedo = tint / sum;
+                g_Sigma = sigma / sum;
                 float3 glowColor = glow / sum;
                 float glowShell = shell / sum;
                 sum = saturate(sum * 2.2);
@@ -113,7 +117,7 @@ Shader "Hidden/TabgVisuals/Smoke"
                 float3 ro = _CamPos.xyz;
 
                 // The part of the ray inside any of the ellipsoids.
-                float t0 = 1e9, t1 = -1.0;
+                float t0 = 1e9, t1 = -1.0, rMax = 0.5;
                 for (int k = 0; k < 8; k++)
                 {
                     if (k >= (int)_SmokeParams.x) break;
@@ -129,6 +133,7 @@ Shader "Hidden/TabgVisuals/Smoke"
                     if (far <= 0.0) continue;
                     t0 = min(t0, max(0.0, near));
                     t1 = max(t1, far);
+                    rMax = max(rMax, max(_SmokePos[k].w, _SmokeInfo[k].x));
                 }
                 if (t1 <= t0) return 0;
 
@@ -141,15 +146,19 @@ Shader "Hidden/TabgVisuals/Smoke"
                 if (!sky) t1 = min(t1, LinearEyeDepth(raw) * rayLen);
                 if (t1 <= t0) return 0;
 
-                int steps = (int)_SmokeParams.y;
-                float dt = (t1 - t0) / steps;
+                // Steps of one fixed length, at fixed distances from the eye: neither the ellipsoid's fit
+                // nor where a ray enters it moves the samples, so the noise does not crawl.
+                float dt = max(0.15, rMax * 2.5 / max(1.0, _SmokeParams.y));
+                // (Unless the ray crosses several smokes far apart: then it has to stretch to reach them all.)
+                dt = max(dt, (t1 - t0) / 60.0);
                 float2 px = i.uv * _ScreenParams.xy;
                 float jitter = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
+                float first = floor(t0 / dt);
+                int steps = min(64, (int)ceil((t1 - first * dt) / dt));
 
                 float cosT = dot(rd, _SunDir.xyz);
                 float phase = (Phase(cosT, 0.55) * 0.7 + Phase(cosT, -0.25) * 0.3) * 4.0 * UNITY_PI;
                 float light = _SmokeParams.z * 0.2;
-                float sigma = _SmokeParams.w;
 
                 float T = 1.0;
                 float3 col = 0;
@@ -157,11 +166,14 @@ Shader "Hidden/TabgVisuals/Smoke"
                 for (int k = 0; k < 64; k++)
                 {
                     if (k >= steps || T < 0.012) break;
-                    float3 p = ro + rd * (t0 + (k + jitter) * dt);
+                    float t = (first + k + jitter) * dt;
+                    if (t < t0 || t > t1) continue;
+                    float3 p = ro + rd * t;
                     float3 albedo;
                     float d = Density(p, true, albedo);
                     if (d <= 0.002) continue;
                     float3 emission = g_Emission;
+                    float sigma = g_Sigma;
 
                     // Light reaching this point, through the smoke toward the sun.
                     float3 unused;

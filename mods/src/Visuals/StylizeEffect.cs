@@ -274,12 +274,22 @@ namespace TabgInstaller.Visuals
             cm.SetVector(CloudLayerId, new Vector4(baseH, baseH + 550f, Mathf.Min(0.95f, p.CloudCoverage.Value + Weather.Overcast * 0.35f), 1f));
             float wind = Time.time * 6f;
             cm.SetVector(CloudShapeId, new Vector4(wind, wind * 0.4f, 900f, p.CloudSteps.Value));
-            var rt = RenderTexture.GetTemporary(Mathf.Max(1, w), Mathf.Max(1, h), 0, RenderTextureFormat.ARGBHalf);
+            w = Mathf.Max(1, w);
+            h = Mathf.Max(1, h);
+            var rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGBHalf);
+            var tmp = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGBHalf);
             Graphics.Blit(Texture2D.blackTexture, rt, cm, 0);
+            cm.SetVector(BlurDirId, new Vector4(1f / w, 0f, 0f, 0f));
+            Graphics.Blit(rt, tmp, cm, 1);
+            cm.SetVector(BlurDirId, new Vector4(0f, 1f / h, 0f, 0f));
+            Graphics.Blit(tmp, rt, cm, 1);
+            RenderTexture.ReleaseTemporary(tmp);
             return rt;
         }
 
         // ---------------------------------------------------------------- smoke
+
+        private const float SmokeTile = 5f;
 
         private RenderTexture RenderSmoke(VisualsPlugin p, Light sun, Color sunColor, int w, int h)
         {
@@ -307,9 +317,9 @@ namespace TabgInstaller.Visuals
             sm.SetVectorArray(SmokeInfoId, _smokeInfo);
             sm.SetVectorArray(SmokeColorId, _smokeColor);
             sm.SetVectorArray(SmokeEmitId, _smokeEmit);
-            // One noise tile holds four billows, so this makes each about a third of the smoke's radius.
-            float tile = Mathf.Clamp(largest * 1.2f, 2f, 80f);
-            sm.SetVector(SmokeParamsId, new Vector4(n, p.SmokeSteps.Value, tile, Mathf.Clamp(7f / largest, 0.15f, 3f)));
+            // A fixed noise scale in world space (one tile holds four billows of about 1.3 m): tying it to the
+            // smoke's size made the whole pattern slide about every time the fit changed.
+            sm.SetVector(SmokeParamsId, new Vector4(n, p.SmokeSteps.Value, SmokeTile, 0f));
             sm.SetTexture(SmokeNoiseId, noise);
 
             w = Mathf.Max(1, w);

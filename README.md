@@ -294,8 +294,8 @@ nothing other players see, and every part has a setting in the **F8** menu.
 |---|---|
 | Light | Sharper soft shadows, stronger ambient occlusion, volumetric sunlight through trees and buildings, sun rays |
 | Sky | Volumetric clouds in place of the painted ones, a softer sky gradient and haze |
-| Weather | Follows the biome: snow and fog in the snow, rain and storms on grass, sandstorms in the desert |
-| Smoke | Real 3D smoke from smoke grenades, lingering smoke and dust after blasts, a faint haze in grenade fields |
+| Weather | Follows the biome: snow and fog in the snow, rain and storms on grass (with puddles that mirror the world), sandstorms in the desert |
+| Smoke | Real 3D smoke from smoke grenades, two to four times as big as the game's, lingering smoke and dust after blasts, a faint haze in grenade fields |
 | Explosions | Light up their surroundings, with bloom and glow; flashbangs burn the view into your eyes |
 | Sea | Foam, richer colour and the sun glowing through the waves |
 | Image | A gentle colour grade and sharpening |

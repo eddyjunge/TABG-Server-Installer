@@ -7,8 +7,8 @@ namespace TabgInstaller.Visuals
     /// <summary>
     /// Swaps the game's smoke-grenade particles for a raymarched volume. The particle system keeps
     /// simulating, only its renderer is off; every few frames an ellipsoid is fitted to the live
-    /// particles, so the volume has the size, position, colour and lifetime of the original smoke
-    /// (including anything CustomGrenades did to it) and hides exactly what the particles would.
+    /// particles, so the volume follows the position, growth, colour and lifetime of the original smoke
+    /// (including anything CustomGrenades did to it), drawn two to four times as large.
     /// </summary>
     internal static class VolumetricSmoke
     {
@@ -21,11 +21,16 @@ namespace TabgInstaller.Visuals
         {
             public ParticleSystem Ps;
             public ParticleSystemRenderer Renderer;
+            // What is drawn, eased every frame toward the last fit, so the volume never jumps.
             public Vector3 Center;
             public float RadiusH, RadiusV;
             public float Density;
             public Color Albedo = new Color(0.8f, 0.8f, 0.8f);
+            public Vector3 TargetCenter;
+            public float TargetH, TargetV, TargetDensity;
+            public Color TargetAlbedo;
             public int PeakCount;
+            public float Scale;   // 2..4, picked once from where the smoke started
             public bool Fitted;
             public float Distance;
         }
@@ -54,10 +59,23 @@ namespace TabgInstaller.Visuals
                 _nextScan = now + ScanInterval;
                 Scan();
             }
-            if (Sources.Count == 0 || now < _nextFit) return;
-            _nextFit = now + FitInterval;
-            for (int i = Sources.Count - 1; i >= 0; i--)
-                if (!Fit(Sources[i])) Sources.RemoveAt(i);
+            if (Sources.Count == 0) return;
+            if (now >= _nextFit)
+            {
+                _nextFit = now + FitInterval;
+                for (int i = Sources.Count - 1; i >= 0; i--)
+                    if (!Fit(Sources[i])) Sources.RemoveAt(i);
+            }
+            float k = 1f - Mathf.Exp(-Time.unscaledDeltaTime * 5f);
+            foreach (var s in Sources)
+            {
+                if (!s.Fitted) continue;
+                s.Center = Vector3.Lerp(s.Center, s.TargetCenter, k);
+                s.RadiusH = Mathf.Lerp(s.RadiusH, s.TargetH, k);
+                s.RadiusV = Mathf.Lerp(s.RadiusV, s.TargetV, k);
+                s.Density = Mathf.Lerp(s.Density, s.TargetDensity, k);
+                s.Albedo = Color.Lerp(s.Albedo, s.TargetAlbedo, k);
+            }
         }
 
         private static void Scan()
@@ -127,23 +145,53 @@ namespace TabgInstaller.Visuals
             float meanH = sumH / n, meanV = sumV / n;
             float radiusH = Mathf.Max(0.5f, meanH + 1.3f * Mathf.Sqrt(Mathf.Max(0f, sumH2 / n - meanH * meanH)));
             float radiusV = Mathf.Max(0.5f, meanV + 1.3f * Mathf.Sqrt(Mathf.Max(0f, sumV2 / n - meanV * meanV)));
+            // Bigger than the game's: it spreads mostly sideways and stays sitting on the ground, like real
+            // smoke rolling out of a canister, instead of a ball swelling up around its middle.
+            if (s.Scale <= 0f) s.Scale = ScaleFor(c);
+            float bottom = c.y - radiusV;
+            radiusH *= s.Scale;
+            radiusV *= 1f + (s.Scale - 1f) * 0.45f;
+            c.y = bottom + radiusV * 0.75f;
 
             s.PeakCount = Mathf.Max(s.PeakCount, n);
             float amount = Mathf.Clamp01((float)n / s.PeakCount * 1.6f);
             Color albedo = Albedo(color);
 
-            float blend = s.Fitted ? 0.25f : 1f;
-            s.Center = Vector3.Lerp(s.Center, c, blend);
-            s.RadiusH = Mathf.Lerp(s.RadiusH, radiusH, blend);
-            s.RadiusV = Mathf.Lerp(s.RadiusV, radiusV, blend);
-            s.Density = Mathf.Lerp(s.Density, amount, blend);
-            s.Albedo = Color.Lerp(s.Albedo, albedo, blend);
+            s.TargetCenter = c;
+            s.TargetH = radiusH;
+            s.TargetV = radiusV;
+            s.TargetDensity = amount;
+            s.TargetAlbedo = albedo;
+            if (!s.Fitted)
+            {
+                s.Center = c;
+                s.RadiusH = radiusH;
+                s.RadiusV = radiusV;
+                s.Density = amount;
+                s.Albedo = albedo;
+            }
             s.Fitted = true;
 
             var p = VisualsPlugin.Instance;
             if (p != null && p.DebugView.Value != 0 && Time.frameCount % 30 == 0)
                 Debug.Log($"[Visuals] smoke '{s.Ps.name}' n={n} centre={s.Center} radiusH={s.RadiusH:0.0} radiusV={s.RadiusV:0.0} density={s.Density:0.00} albedo={s.Albedo}");
             return true;
+        }
+
+        /// <summary>
+        /// How much bigger than the game's own smoke this one is drawn: 2x to 4x, from a hash of where it
+        /// started, so every player with the mod sees the same size without any network traffic.
+        /// </summary>
+        private static float ScaleFor(Vector3 start)
+        {
+            unchecked
+            {
+                uint h = (uint)Mathf.RoundToInt(start.x * 2f) * 73856093u ^ (uint)Mathf.RoundToInt(start.z * 2f) * 83492791u;
+                h ^= h >> 13;
+                h *= 0x5bd1e995u;
+                h ^= h >> 15;
+                return 2f + 2f * (h & 0xffff) / 65535f;
+            }
         }
 
         /// <summary>
@@ -218,7 +266,8 @@ namespace TabgInstaller.Visuals
             {
                 var c = Candidates[i];
                 pos[i] = new Vector4(c.Center.x, c.Center.y, c.Center.z, c.RadiusH);
-                info[i] = new Vector4(c.RadiusV, c.Density, 0f, 0f);
+                // Extinction per smoke: a small puff is as opaque as a big cloud is through its middle.
+                info[i] = new Vector4(c.RadiusV, c.Density, Mathf.Clamp(7f / Mathf.Max(c.RadiusH, c.RadiusV), 0.15f, 3f), 0f);
                 color[i] = c.Albedo;
                 emit[i] = new Vector4(c.Emit.r, c.Emit.g, c.Emit.b, c.Shell);
                 largest = Mathf.Max(largest, Mathf.Max(c.RadiusH, c.RadiusV));
