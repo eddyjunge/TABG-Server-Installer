@@ -315,7 +315,10 @@ mod tests {
         let mut t = 10.1;
         while t < 3000.0 {
             t += 1.0;
-            assert!(ring.tick(t, &mut rng).is_empty(), "the ring never moves again");
+            assert!(
+                ring.tick(t, &mut rng).is_empty(),
+                "the ring never moves again"
+            );
         }
         assert_eq!(ring.current(t), ([125.0, 0.0, -97.0], 320.0));
     }

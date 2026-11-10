@@ -485,7 +485,10 @@ impl ServerToml {
             .center
             .is_some_and(|c| c.iter().any(|v| !v.is_finite() || v.abs() > 5000.0))
         {
-            p.push(problem("ring.center", "[x, z] inside the map (-5000 to 5000)"));
+            p.push(problem(
+                "ring.center",
+                "[x, z] inside the map (-5000 to 5000)",
+            ));
         }
         if !self.ring.sizes.is_empty() && self.ring.sizes.windows(2).any(|w| w[1] > w[0]) {
             p.push(problem(
