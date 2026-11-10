@@ -414,6 +414,9 @@ scripts/extract-assets.sh [client|server] [unity|content|sounds|shaders|all]
 
 The design, all decisions and the milestones are in [docs/DESIGN.md](docs/DESIGN.md).
 
+Want to help? Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and the code and design style.
+Changes reach `main` through pull requests.
+
 ### Repo layout
 
 ```
