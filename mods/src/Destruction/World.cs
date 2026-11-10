@@ -77,6 +77,73 @@ namespace TabgInstaller.Destruction
         }
     }
 
+    /// <summary>
+    /// Unity's static batching merges objects into one world-space mesh per area; each renderer then
+    /// draws its own range of submeshes. These get one object's part back out.
+    /// </summary>
+    internal static class StaticBatch
+    {
+        private const System.Reflection.BindingFlags Hidden = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        private static readonly System.Reflection.PropertyInfo RootProperty = typeof(Renderer).GetProperty("staticBatchRootTransform", Hidden);
+
+        public static Transform Root(Renderer r) => RootProperty?.GetValue(r) as Transform;
+
+        /// <summary>Where the batch's vertices live: the batch root, or the world.</summary>
+        public static Matrix4x4 Matrix(Renderer r)
+        {
+            Transform root = Root(r);
+            return root != null ? root.localToWorldMatrix : Matrix4x4.identity;
+        }
+
+        /// <summary>This renderer's triangles as a mesh of their own; null if the batch can't be read.</summary>
+        public static MeshData Slice(MeshRenderer r, Mesh batch)
+        {
+            MeshData all = MeshData.Of(batch);
+            int first = r.subMeshStartIndex, count = r.sharedMaterials.Length;
+            if (all == null || first < 0 || count <= 0 || first + count > all.Submeshes.Length)
+                return null;
+            var remap = new Dictionary<int, int>();
+            var used = new List<int>();
+            var subs = new int[count][];
+            for (int s = 0; s < count; s++)
+            {
+                int[] tris = all.Submeshes[first + s];
+                var mine = new int[tris.Length];
+                for (int i = 0; i < tris.Length; i++)
+                {
+                    if (!remap.TryGetValue(tris[i], out int v))
+                    {
+                        v = used.Count;
+                        remap[tris[i]] = v;
+                        used.Add(tris[i]);
+                    }
+                    mine[i] = v;
+                }
+                subs[s] = mine;
+            }
+            bool normals = all.Normals.Length == all.Vertices.Length;
+            bool tangents = all.Tangents.Length == all.Vertices.Length;
+            bool uv = all.UV.Length == all.Vertices.Length;
+            var data = new MeshData
+            {
+                Vertices = new Vector3[used.Count],
+                Normals = normals ? new Vector3[used.Count] : new Vector3[0],
+                Tangents = tangents ? new Vector4[used.Count] : new Vector4[0],
+                UV = uv ? new Vector2[used.Count] : new Vector2[0],
+                Submeshes = subs,
+            };
+            for (int i = 0; i < used.Count; i++)
+            {
+                int o = used[i];
+                data.Vertices[i] = all.Vertices[o];
+                if (normals) data.Normals[i] = all.Normals[o];
+                if (tangents) data.Tangents[i] = all.Tangents[o];
+                if (uv) data.UV[i] = all.UV[o];
+            }
+            return data;
+        }
+    }
+
     internal sealed class ColliderSource
     {
         public Collider Collider;
@@ -101,6 +168,13 @@ namespace TabgInstaller.Destruction
         public bool Standalone;
         public bool Merged;
         public bool Anchored;
+        /// <summary>A tree (or bush): never cut, falls over whole when it breaks.</summary>
+        public bool Tree;
+        /// <summary>The lower-detail versions of this renderer (LOD1+), hidden with it.</summary>
+        public Renderer[] LodSiblings;
+        public bool[] LodSiblingsEnabled;
+        /// <summary>Drawn from a static batch: its triangles are submeshes of a shared, world-space mesh.</summary>
+        public bool Batched;
         public MeshData Data;
         public TriSoup Soup;
         public float Area;
@@ -112,15 +186,18 @@ namespace TabgInstaller.Destruction
         public readonly List<ColliderSource> Colliders = new List<ColliderSource>();
     }
 
-    /// <summary>Finds the buildings in the loaded map and what they are made of. Runs once per map.</summary>
+    /// <summary>Finds everything breakable in the loaded map and what it is made of. Runs once per map.</summary>
     internal sealed class WorldIndex
     {
-        private static readonly Regex Building = new Regex(
-            @"Bld|House|Castle|Factory_House|Bunker|Apartment|Area51_Wall|Env_Wall|Warehouse|Barn|Church|Station|Office|Tower|Wall_Concrete|WallPiece",
+        /// <summary>The ground itself and things that aren't solid: everything else in the map can break.</summary>
+        private static readonly Regex NeverBreaks = new Regex(
+            @"Road|Sidewalk|Terrain|Cloud|Mountain|Cliff|Water|Ocean|Decal|Logo|Skybox|^FX_|Grass|Gound|Ground|Floor_Ground|Shadow$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static readonly Regex NotBuilding = new Regex(
-            @"Road|Sidewalk|Rock|Cliff|Pipe|Sign|Quarantine|Wire|Railing|Lamp|Terrain|Cloud|Mountain|Sand",
+        private static readonly Regex TreeName = new Regex(
+            @"(?<!s)Tree|Fir_|_Fir|Spruce|Pine|Palm|Birch|Oak|Cactus|Bush",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        /// <summary>Layers that hold visible map geometry (not water, UI, effects).</summary>
+        private const int RenderLayers = ~((1 << 4) | (1 << 5));
         private static readonly Regex Helper = new Regex(@"^(Cube|Cylinder|Capsule|Sphere|Quad|Plane)\b|Collision|RaycastCube|Foundation",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private const int WorldLayers = (1 << 0) | (1 << 9) | (1 << 11);
@@ -131,6 +208,11 @@ namespace TabgInstaller.Destruction
         private const float TileSize = 40f;
 
         public readonly List<Structure> Structures = new List<Structure>();
+        /// <summary>Structures that were hit at least once: the only ones with work to pump.</summary>
+        public readonly List<Structure> Active = new List<Structure>();
+        private const float StructureCell = 32f;
+        private readonly Dictionary<long, List<Structure>> _structureGrid = new Dictionary<long, List<Structure>>();
+        private int _stamp;
         public readonly MergedMap Merged = new MergedMap();
         public readonly List<Material> Materials = new List<Material>();
         public readonly List<PhysicMaterial> PhysicMaterials = new List<PhysicMaterial>();
@@ -175,10 +257,12 @@ namespace TabgInstaller.Destruction
             Merged.Scan();
             var pieces = new List<Piece>();
             var byTransform = new Dictionary<Transform, Piece>();
-            var props = new List<Piece>();
+            Dictionary<Renderer, List<Renderer>> lods = LodSiblings(out HashSet<Renderer> lowerLods);
             foreach (MeshRenderer r in Resources.FindObjectsOfTypeAll<MeshRenderer>())
             {
                 if (!r.gameObject.scene.IsValid() || r.hideFlags != HideFlags.None)
+                    continue;
+                if (((1 << r.gameObject.layer) & RenderLayers) == 0 || lowerLods.Contains(r))
                     continue;
                 if (r.GetComponent<CachedComponents>() != null)
                     continue;
@@ -187,40 +271,133 @@ namespace TabgInstaller.Destruction
                 var filter = r.GetComponent<MeshFilter>();
                 if (filter == null || filter.sharedMesh == null)
                     continue;
-                bool dynamicThing = r.GetComponentInParent<Rigidbody>() != null;
+                // Doors, loot and cars move by themselves; the game owns them.
+                if (r.GetComponentInParent<Rigidbody>() != null)
+                    continue;
                 string name = r.name;
-                bool building = Building.IsMatch(name) && !NotBuilding.IsMatch(name) && !dynamicThing;
+                if (NeverBreaks.IsMatch(name))
+                    continue;
+                bool tree = TreeName.IsMatch(name) || (r.transform.parent != null && TreeName.IsMatch(r.transform.parent.name));
                 var piece = new Piece
                 {
                     Renderer = r,
                     Mesh = filter.sharedMesh,
                     Matrix = r.transform.localToWorldMatrix,
-                    Fracturable = building,
+                    Fracturable = !tree,
+                    Tree = tree,
                     Merged = !r.enabled,
-                    Standalone = dynamicThing || name.IndexOf("Door", System.StringComparison.OrdinalIgnoreCase) >= 0,
+                    Standalone = name.IndexOf("Door", System.StringComparison.OrdinalIgnoreCase) >= 0,
+                    Batched = r.isPartOfStaticBatch,
                 };
-                BoundsOf(piece.Mesh.bounds, piece.Matrix, out piece.Min, out piece.Max);
-                if (building)
+                if (lods.TryGetValue(r, out List<Renderer> siblings))
                 {
-                    Vector3 size = piece.Max - piece.Min;
-                    if (Mathf.Max(size.x, size.y, size.z) > MaxPieceSize)
-                        continue;
-                    pieces.Add(piece);
-                    byTransform[r.transform] = piece;
+                    piece.LodSiblings = siblings.ToArray();
+                    piece.LodSiblingsEnabled = new bool[siblings.Count];
+                    for (int i = 0; i < siblings.Count; i++)
+                        piece.LodSiblingsEnabled[i] = siblings[i].enabled;
                 }
-                else if (!dynamicThing)
+                if (piece.Batched)
                 {
-                    props.Add(piece);
+                    // The filter holds the whole batch; the renderer knows its own box.
+                    piece.Min = r.bounds.min;
+                    piece.Max = r.bounds.max;
                 }
+                else
+                {
+                    BoundsOf(piece.Mesh.bounds, piece.Matrix, out piece.Min, out piece.Max);
+                }
+                Vector3 size = piece.Max - piece.Min;
+                if (Mathf.Max(size.x, size.y, size.z) > MaxPieceSize)
+                    continue;
+                pieces.Add(piece);
+                byTransform[r.transform] = piece;
             }
             // Scan order differs between machines; everything downstream must not.
             pieces.Sort(StableOrder);
-            props.Sort(StableOrder);
             Cluster(pieces);
-            AttachProps(props, byTransform);
-            AttachColliders(byTransform);
             foreach (Structure s in Structures)
+            {
                 s.Index = this;
+                ForStructureCells(s.Min, s.Max, key =>
+                {
+                    if (!_structureGrid.TryGetValue(key, out List<Structure> list))
+                        _structureGrid[key] = list = new List<Structure>();
+                    list.Add(s);
+                });
+            }
+            AttachColliders(byTransform);
+        }
+
+        /// <summary>For each LOD0 renderer, the renderers of its other LOD levels.</summary>
+        private static Dictionary<Renderer, List<Renderer>> LodSiblings(out HashSet<Renderer> lower)
+        {
+            var map = new Dictionary<Renderer, List<Renderer>>();
+            lower = new HashSet<Renderer>();
+            foreach (LODGroup g in Resources.FindObjectsOfTypeAll<LODGroup>())
+            {
+                if (!g.gameObject.scene.IsValid())
+                    continue;
+                LOD[] levels = g.GetLODs();
+                if (levels.Length < 2)
+                    continue;
+                Renderer main = null;
+                foreach (Renderer r in levels[0].renderers)
+                {
+                    if (r is MeshRenderer)
+                    {
+                        main = r;
+                        break;
+                    }
+                }
+                if (main == null)
+                    continue;
+                for (int i = 1; i < levels.Length; i++)
+                {
+                    foreach (Renderer r in levels[i].renderers)
+                    {
+                        if (r == null || r == main || !lower.Add(r))
+                            continue;
+                        if (!map.TryGetValue(main, out List<Renderer> list))
+                            map[main] = list = new List<Renderer>();
+                        list.Add(r);
+                    }
+                }
+            }
+            return map;
+        }
+
+        private static void ForStructureCells(Vector3 min, Vector3 max, System.Action<long> action)
+        {
+            int x0 = Mathf.FloorToInt(min.x / StructureCell), x1 = Mathf.FloorToInt(max.x / StructureCell);
+            int z0 = Mathf.FloorToInt(min.z / StructureCell), z1 = Mathf.FloorToInt(max.z / StructureCell);
+            for (int x = x0; x <= x1; x++)
+            {
+                for (int z = z0; z <= z1; z++)
+                    action(((long)x << 32) ^ (uint)z);
+            }
+        }
+
+        /// <summary>Structures whose box may reach within <paramref name="r"/> of <paramref name="c"/>, each once.</summary>
+        public List<Structure> Near(Vector3 c, float r)
+        {
+            var found = new List<Structure>();
+            int stamp = ++_stamp;
+            ForStructureCells(c - new Vector3(r, 0f, r), c + new Vector3(r, 0f, r), key =>
+            {
+                if (!_structureGrid.TryGetValue(key, out List<Structure> list))
+                    return;
+                foreach (Structure s in list)
+                {
+                    if (s.Stamp == stamp)
+                        continue;
+                    s.Stamp = stamp;
+                    if (s.Overlaps(c, r))
+                        found.Add(s);
+                }
+            });
+            // Grid order isn't stable; keep the scan order.
+            found.Sort((a, b) => a.Salt.CompareTo(b.Salt));
+            return found;
         }
 
         private static int StableOrder(Piece a, Piece b)
@@ -340,26 +517,6 @@ namespace TabgInstaller.Destruction
             && a.Min.y <= b.Max.y + margin && b.Min.y <= a.Max.y + margin
             && a.Min.z <= b.Max.z + margin && b.Min.z <= a.Max.z + margin;
 
-        private void AttachProps(List<Piece> props, Dictionary<Transform, Piece> byTransform)
-        {
-            foreach (Piece prop in props)
-            {
-                Vector3 centre = (prop.Min + prop.Max) * 0.5f;
-                Vector3 size = prop.Max - prop.Min;
-                if (Mathf.Max(size.x, size.y, size.z) > 14f)
-                    continue;
-                foreach (Structure s in Structures)
-                {
-                    if (centre.x < s.Min.x || centre.x > s.Max.x || centre.y < s.Min.y || centre.y > s.Max.y
-                        || centre.z < s.Min.z || centre.z > s.Max.z)
-                        continue;
-                    s.Add(prop);
-                    byTransform[prop.Renderer.transform] = prop;
-                    break;
-                }
-            }
-        }
-
         private void AttachColliders(Dictionary<Transform, Piece> byTransform)
         {
             foreach (Collider c in Resources.FindObjectsOfTypeAll<Collider>())
@@ -386,7 +543,7 @@ namespace TabgInstaller.Destruction
 
         private Piece PieceContaining(Vector3 p)
         {
-            foreach (Structure s in Structures)
+            foreach (Structure s in Near(p, 0f))
             {
                 if (p.x < s.Min.x || p.x > s.Max.x || p.y < s.Min.y || p.y > s.Max.y || p.z < s.Min.z || p.z > s.Max.z)
                     continue;

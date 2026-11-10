@@ -4,18 +4,24 @@ using UnityEngine;
 namespace TabgInstaller.Destruction
 {
     /// <summary>
-    /// Falling pieces and dust. Local eye candy: not synchronised, and on a layer that can't touch
-    /// the local player, so what you see fall can't move you differently from everyone else.
+    /// Falling pieces and dust. Not synchronised (each client simulates its own), but solid: players
+    /// stand on them, push them and shoot them. A piece stays while anyone is near and goes once
+    /// nobody has been close to it for a while.
     /// </summary>
     internal sealed class DebrisSpawner
     {
-        private const int DebrisLayer = 22; // DontCollideWithLocalPlayer
-        private const int MaxAlive = 220;
+        private const int MaxAlive = 450;
+        private const float NearDistance = 90f;
+        private const float GoneAfter = 25f;
+        private const float CheckEvery = 2f;
+        private const int MaxConvexVertices = 2500;
 
-        private readonly List<GameObject> _alive = new List<GameObject>();
+        private readonly List<DebrisLife> _alive = new List<DebrisLife>();
+        private readonly List<Vector3> _players = new List<Vector3>();
         private readonly Transform _root;
         private Material _dust;
         private bool _lookedForDust;
+        private float _nextCheck;
 
         public DebrisSpawner(Transform root)
         {
@@ -28,7 +34,7 @@ namespace TabgInstaller.Destruction
             foreach (DebrisData d in debris)
             {
                 if (_alive.Count >= MaxAlive)
-                    break;
+                    DropFarthest();
                 Create(d, index);
             }
             if (DestructionPlugin.Instance.Dust.Value)
@@ -38,28 +44,177 @@ namespace TabgInstaller.Destruction
             }
         }
 
+        public void Clear()
+        {
+            foreach (DebrisLife d in _alive)
+            {
+                if (d != null)
+                    Object.Destroy(d.gameObject);
+            }
+            _alive.Clear();
+        }
+
+        /// <summary>Main thread, every frame: removes what nobody has been near for a while.</summary>
+        public void Tick()
+        {
+            if (Time.time < _nextCheck || _alive.Count == 0)
+                return;
+            _nextCheck = Time.time + CheckEvery;
+            _alive.RemoveAll(g => g == null);
+            FindPlayers();
+            foreach (DebrisLife d in _alive)
+            {
+                Vector3 at = d.transform.position;
+                if (at.y < -200f)
+                {
+                    d.Vanish();
+                    continue;
+                }
+                foreach (Vector3 p in _players)
+                {
+                    if ((p - at).sqrMagnitude < NearDistance * NearDistance)
+                    {
+                        d.LastSeen = Time.time;
+                        break;
+                    }
+                }
+                if (Time.time - d.LastSeen > GoneAfter)
+                    d.Vanish();
+            }
+        }
+
+        private void FindPlayers()
+        {
+            _players.Clear();
+            if (Camera.main != null)
+                _players.Add(Camera.main.transform.position);
+            foreach (Player p in Object.FindObjectsOfType<Player>())
+            {
+                if (p == null)
+                    continue;
+                Transform t = p.Torso != null ? p.Torso.transform : p.transform;
+                _players.Add(t.position);
+            }
+        }
+
+        private void DropFarthest()
+        {
+            Vector3 viewer = Camera.main != null ? Camera.main.transform.position : Vector3.zero;
+            int far = -1;
+            float best = -1f;
+            for (int i = 0; i < _alive.Count; i++)
+            {
+                if (_alive[i] == null || _alive[i].Vanishing)
+                    continue;
+                float d = (_alive[i].transform.position - viewer).sqrMagnitude;
+                if (d > best)
+                {
+                    best = d;
+                    far = i;
+                }
+            }
+            if (far < 0)
+                return;
+            Object.Destroy(_alive[far].gameObject);
+            _alive.RemoveAt(far);
+        }
+
         private void Create(DebrisData d, WorldIndex index)
         {
-            var go = new GameObject("TABG Destruction debris") { layer = DebrisLayer };
+            var go = new GameObject("TABG Destruction debris") { layer = 0 };
             go.transform.SetParent(_root, false);
-            go.transform.position = d.Centre;
-            Mesh mesh = MeshBuilder.ToMesh(d.Mesh);
-            go.AddComponent<MeshFilter>().sharedMesh = mesh;
-            var renderer = go.AddComponent<MeshRenderer>();
-            var materials = new Material[d.Mesh.MaterialIds.Length];
-            for (int i = 0; i < materials.Length; i++)
-                materials[i] = d.Mesh.MaterialIds[i] >= 0 ? index.Materials[d.Mesh.MaterialIds[i]] : null;
-            renderer.sharedMaterials = materials;
+            Mesh mesh;
+            Material[] materials;
+            bool ownMesh;
+            bool batched = false;
+            if (d.Whole != null)
+            {
+                Piece p = d.Whole;
+                if (p.Batched)
+                {
+                    // The batch's vertices are already in place; this object sits at the piece's centre.
+                    go.transform.position = d.Centre;
+                }
+                else
+                {
+                    go.transform.SetPositionAndRotation(p.Matrix.GetColumn(3), p.Matrix.rotation);
+                    go.transform.localScale = p.Matrix.lossyScale;
+                }
+                mesh = p.Mesh;
+                materials = p.Renderer != null ? p.Renderer.sharedMaterials : new Material[0];
+                ownMesh = false;
+                batched = p.Batched;
+            }
+            else
+            {
+                go.transform.position = d.Centre;
+                mesh = MeshBuilder.ToMesh(d.Mesh);
+                materials = new Material[d.Mesh.MaterialIds.Length];
+                for (int i = 0; i < materials.Length; i++)
+                    materials[i] = d.Mesh.MaterialIds[i] >= 0 ? index.Materials[d.Mesh.MaterialIds[i]] : null;
+                ownMesh = true;
+            }
+            if (batched)
+            {
+                // Part of a static batch: draw this object's submeshes of the shared mesh, moved by this transform.
+                var source = (MeshRenderer)d.Whole.Renderer;
+                Matrix4x4 offset = Matrix4x4.Translate(-d.Centre) * StaticBatch.Matrix(source);
+                go.AddComponent<BatchedSlice>().Begin(mesh, source.subMeshStartIndex, materials, go.layer, offset);
+            }
+            else
+            {
+                go.AddComponent<MeshFilter>().sharedMesh = mesh;
+                go.AddComponent<MeshRenderer>().sharedMaterials = materials;
+            }
 
-            Vector3 size = new Vector3(Mathf.Max(d.Size.x, 0.2f), Mathf.Max(d.Size.y, 0.2f), Mathf.Max(d.Size.z, 0.2f));
-            go.AddComponent<BoxCollider>().size = size * 0.85f;
+            if (batched || !AddConvexCollider(go, mesh))
+            {
+                var box = go.AddComponent<BoxCollider>();
+                if (batched)
+                {
+                    box.center = Vector3.zero;
+                    box.size = d.Size;
+                }
+                else if (d.Whole != null)
+                {
+                    box.center = mesh.bounds.center;
+                    box.size = mesh.bounds.size;
+                }
+                else
+                {
+                    box.size = new Vector3(Mathf.Max(d.Size.x, 0.2f), Mathf.Max(d.Size.y, 0.2f), Mathf.Max(d.Size.z, 0.2f)) * 0.85f;
+                }
+            }
             var body = go.AddComponent<Rigidbody>();
             body.mass = d.Mass;
             body.velocity = d.Velocity;
             body.angularVelocity = d.Spin;
+            body.maxAngularVelocity = 7f;
             body.collisionDetectionMode = CollisionDetectionMode.Discrete;
-            go.AddComponent<DebrisLife>().Begin(d.Life, mesh, this);
-            _alive.Add(go);
+            var life = go.AddComponent<DebrisLife>();
+            life.Begin(ownMesh ? mesh : null, this);
+            _alive.Add(life);
+        }
+
+        /// <summary>A collider in the real shape, where Unity can make one; false to fall back to a box.</summary>
+        private static bool AddConvexCollider(GameObject go, Mesh mesh)
+        {
+            if (mesh == null || !mesh.isReadable || mesh.vertexCount < 4 || mesh.vertexCount > MaxConvexVertices)
+                return false;
+            Vector3 size = mesh.bounds.size;
+            if (Mathf.Min(size.x, Mathf.Min(size.y, size.z)) < 0.02f)
+                return false;
+            try
+            {
+                var c = go.AddComponent<MeshCollider>();
+                c.convex = true;
+                c.sharedMesh = mesh;
+                return true;
+            }
+            catch (System.Exception)
+            {
+                return false;
+            }
         }
 
         internal void Puff(Vector3 at) => CreateDust(at);
@@ -134,20 +289,61 @@ namespace TabgInstaller.Destruction
         }
     }
 
+    /// <summary>Draws a range of submeshes of a shared (statically batched) mesh with this object's transform.</summary>
+    internal sealed class BatchedSlice : MonoBehaviour
+    {
+        private Mesh _mesh;
+        private int _first;
+        private Material[] _materials;
+        private int _layer;
+        private Matrix4x4 _offset;
+
+        /// <param name="offset">From the batch's space to this object's space.</param>
+        public void Begin(Mesh mesh, int first, Material[] materials, int layer, Matrix4x4 offset)
+        {
+            _mesh = mesh;
+            _first = first;
+            _materials = materials;
+            _layer = layer;
+            _offset = offset;
+        }
+
+        private void LateUpdate()
+        {
+            if (_mesh == null)
+                return;
+            Matrix4x4 m = transform.localToWorldMatrix * _offset;
+            for (int i = 0; i < _materials.Length; i++)
+            {
+                if (_materials[i] != null && _first + i < _mesh.subMeshCount)
+                    Graphics.DrawMesh(_mesh, m, _materials[i], _layer, null, _first + i);
+            }
+        }
+    }
+
     internal sealed class DebrisLife : MonoBehaviour
     {
         private const float ShrinkTime = 1.2f;
 
-        private float _dies;
+        public float LastSeen;
+        public bool Vanishing => _vanishAt > 0f;
+        private float _vanishAt;
         private Mesh _mesh;
         private DebrisSpawner _spawner;
         private bool _puffed;
 
-        public void Begin(float life, Mesh mesh, DebrisSpawner spawner)
+        /// <param name="ownMesh">A mesh made for this piece, destroyed with it; null when it shows a map mesh.</param>
+        public void Begin(Mesh ownMesh, DebrisSpawner spawner)
         {
-            _dies = Time.time + life;
-            _mesh = mesh;
+            LastSeen = Time.time;
+            _mesh = ownMesh;
             _spawner = spawner;
+        }
+
+        public void Vanish()
+        {
+            if (_vanishAt <= 0f)
+                _vanishAt = Time.time + ShrinkTime;
         }
 
         private void OnCollisionEnter(Collision c)
@@ -158,11 +354,23 @@ namespace TabgInstaller.Destruction
             _spawner.Puff(transform.position);
         }
 
+        private float _born = -1f;
+
         private void Update()
         {
-            float left = _dies - Time.time;
-            if (left < ShrinkTime)
-                transform.localScale = Vector3.one * Mathf.Max(0.02f, left / ShrinkTime);
+            if (_born < 0f)
+                _born = Time.time;
+            else if (_born > 0f && Time.time - _born > 3f && DestructionPlugin.Instance.Verbose)
+            {
+                _born = 0f;
+                var r = GetComponent<Renderer>();
+                Debug.Log($"[Destruction] debris after 3 s: at {transform.position} tilt {Vector3.Angle(transform.up, Vector3.up):F0} deg, "
+                    + $"visible {r != null && r.isVisible}, bounds {(r != null ? r.bounds.ToString() : "-")}, sleeping {GetComponent<Rigidbody>()?.IsSleeping()}");
+            }
+            if (_vanishAt <= 0f)
+                return;
+            float left = _vanishAt - Time.time;
+            transform.localScale *= Mathf.Clamp01(1f - Time.deltaTime / Mathf.Max(left, 0.05f));
             if (left <= 0f)
                 Destroy(gameObject);
         }

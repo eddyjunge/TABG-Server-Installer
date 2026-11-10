@@ -29,6 +29,7 @@
 #   TABG_TEST_USE     "gun|grenade:item@seconds,count": at TABG_TEST_TARGET, give yourself the item, pick it up
 #                     and really fire or throw it (e.g. "gun:179@60,3", "grenade:197@60,3")
 #   TABG_TEST_BURST   "0.05,0.5,2,...": seconds after the explosion to capture (default: just the flash)
+#   TABG_TEST_PORT    server port (default 7777; another one while your own server runs)
 #   TABG_TEST_RELAY=1 host through Unity Relay and join by code (needs internet) instead of 127.0.0.1
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -63,7 +64,8 @@ for _ in $(seq 1 60); do pgrep -x TotallyAccurate >/dev/null || break; sleep 1; 
 pgrep -x TotallyAccurate >/dev/null && { echo "TABG is still running; close it first"; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT"
 WORLD_ARGS=(); [[ -s "$WORLD" ]] && WORLD_ARGS=(--world "$WORLD")
-NET_ARGS=(--bind 127.0.0.1 --port 7777); JOIN=127.0.0.1:7777; BOT_NET=(--port 7777)
+PORT=${TABG_TEST_PORT:-7777}
+NET_ARGS=(--bind 127.0.0.1 --port "$PORT"); JOIN=127.0.0.1:$PORT; BOT_NET=(--port "$PORT")
 [[ -n "${TABG_TEST_RELAY:-}" ]] && NET_ARGS=(--relay --game-dir "$TEST")
 RUST_LOG=debug,tabg_server=debug ./target/release/tabg-server "${NET_ARGS[@]}" --admin "*" ${TABG_TEST_SERVER_ARGS:-} "${WORLD_ARGS[@]}" > "$OUT/server.log" 2>&1 &
 SERVER=$!

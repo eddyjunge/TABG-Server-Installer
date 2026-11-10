@@ -219,7 +219,7 @@ All of them are optional. Friends get them through the share code, never by hand
 | ModSettings | `mod-settings` | In-game settings for the other mods | F9 |
 | PerformanceClient | `performance-client` | FPS, culling, streaming and network optimizations, with a frame-time overlay | F10 |
 | PopupBlocker | `popup-blocker` | Hides the anti-cheat popups in the modded copy | |
-| Destruction | `destruction` | Grenades and rockets break buildings (see [Destruction](#destruction)). Added automatically with `game.destruction` | |
+| Destruction | `destruction` | Explosions break buildings, props and trees (see [Destruction](#destruction)). Added automatically with `game.destruction` | |
 | Visuals | `visuals` | Better lighting, clouds, smoke, weather and sea (see [Visuals](#visuals)) | F8 |
 
 ## Proximity Voice Chat
@@ -271,8 +271,13 @@ servers that haven't enabled it.
 
 ## Destruction
 
-Grenades and rockets break buildings where they hit, and whatever loses its support comes down.
+Every explosion breaks the map where it hits: grenades, dynamite, rockets, the Gaussbow, air and
+orbital strikes, knockback and black hole grenades. Buildings, walls, containers, pipes, fences,
+furniture and rocks crack open, whatever loses its support comes down, and trees fall over.
 
+- Falling pieces are solid: you can stand on them, push them and take cover behind them. They stay
+  while anyone is near and disappear once nobody has been within 90 m for 25 s. They are local, so
+  each player's pieces land a little differently; the holes are the same for everyone.
 - Clients report blasts (event 246). The server merges reports of the same blast, keeps one ordered
   log for the match and sends it to everyone. Each client breaks the buildings the same way from
   that log, so all players with the mod see the same holes, also if they join later.

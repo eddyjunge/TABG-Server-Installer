@@ -13,6 +13,8 @@ namespace TabgInstaller.Destruction
         public List<MergedMap.Rebuild> Merged;
         public readonly List<SectionData> Sections = new List<SectionData>();
         public readonly List<Piece> HideRenderers = new List<Piece>();
+        /// <summary>Pieces whose lower LOD levels must go (once the piece itself is drawn by us or gone).</summary>
+        public readonly List<Piece> HideLods = new List<Piece>();
         public readonly List<ColliderSource> DisableColliders = new List<ColliderSource>();
         public readonly List<DebrisData> Debris = new List<DebrisData>();
         public readonly List<Vector3> Dust = new List<Vector3>();
@@ -56,7 +58,8 @@ namespace TabgInstaller.Destruction
         public float Mass;
         public Vector3 Velocity;
         public Vector3 Spin;
-        public float Life;
+        /// <summary>Set instead of <see cref="Mesh"/>: the whole original object falls (trees, unreadable meshes).</summary>
+        public Piece Whole;
     }
 
     /// <summary>A building: its parts, what holds them up, and the meshes that replace the originals once damaged.</summary>
@@ -71,12 +74,15 @@ namespace TabgInstaller.Destruction
         private const float ClusterSize = 5f;
         private const int MaxBlastDebris = 40;
         private const int MaxCollapseDebris = 18;
+        private const int MaxWholeDebris = 30;
         private const int MaxDustPerBlast = 14;
         private const float DebrisDistance = 160f;
         /// <summary>Don't bother cutting things smaller than this; they just go whole.</summary>
         private const float MinFracturableSize = 1.6f;
 
         public int Salt;
+        /// <summary>For <see cref="WorldIndex.Near"/>: visited in the current lookup.</summary>
+        public int Stamp;
         public WorldIndex Index;
         public Vector3 Min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
         public Vector3 Max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
@@ -111,7 +117,10 @@ namespace TabgInstaller.Destruction
         public void Enqueue(Blast blast, Vector3 viewer, float debrisAmount)
         {
             if (!_captured)
+            {
                 Capture();
+                Index.Active.Add(this);
+            }
             _work = _work.ContinueWith(_ =>
             {
                 try
@@ -132,8 +141,15 @@ namespace TabgInstaller.Destruction
             var merged = new List<MeshRenderer>();
             foreach (Piece p in Pieces)
             {
-                // "Combined Mesh" = static batching: one renderer's slice of a shared buffer, not its shape.
-                p.Data = p.Mesh.name.StartsWith("Combined Mesh") ? null : MeshData.Of(p.Mesh);
+                if (p.Batched)
+                {
+                    p.Data = StaticBatch.Slice((MeshRenderer)p.Renderer, p.Mesh);
+                    p.Matrix = StaticBatch.Matrix(p.Renderer);
+                }
+                else
+                {
+                    p.Data = MeshData.Of(p.Mesh);
+                }
                 if (p.Data == null)
                     p.Standalone = true;
                 if (!p.Standalone)
@@ -143,14 +159,35 @@ namespace TabgInstaller.Destruction
                     for (int i = 0; i < p.Materials.Length; i++)
                         p.MaterialIds[i] = Index.MaterialId(p.Materials[i]);
                     if (p.Merged)
+                    {
                         merged.Add(p.Renderer);
+                        if (p.LodSiblings != null)
+                        {
+                            foreach (Renderer r in p.LodSiblings)
+                            {
+                                if (r is MeshRenderer m)
+                                    merged.Add(m);
+                            }
+                        }
+                    }
                 }
-                Strength(p.Renderer.name, out p.Health, out p.CapacityBase);
+                Strength(p, out p.Health, out p.CapacityBase);
                 p.Anchored = IsAnchored(p);
                 foreach (ColliderSource c in p.Colliders)
                     CaptureCollider(c);
             }
             _dirtyCells = Index.Merged.Exclude(merged);
+            if (DestructionPlugin.Instance.Verbose)
+            {
+                int batched = 0, readable = 0, standalone = 0, trees = 0;
+                foreach (Piece p in Pieces)
+                {
+                    if (p.Batched) { batched++; if (p.Data != null) readable++; }
+                    if (p.Standalone) standalone++;
+                    if (p.Tree) trees++;
+                }
+                Debug.Log($"[Destruction] captured {Pieces.Count} parts near {(Min + Max) * 0.5f}: {trees} trees, {batched} batched ({readable} readable), {standalone} standalone; first {Pieces[0].Renderer.name}");
+            }
         }
 
         private bool IsAnchored(Piece p)
@@ -168,10 +205,28 @@ namespace TabgInstaller.Destruction
             return false;
         }
 
-        private static void Strength(string name, out float health, out float capacity)
+        private static void Strength(Piece p, out float health, out float capacity)
         {
-            string n = name.ToLowerInvariant();
-            if (n.Contains("wood") || n.Contains("barn") || n.Contains("shack") || n.Contains("single") || n.Contains("double"))
+            string n = p.Renderer.name.ToLowerInvariant();
+            Vector3 size = p.Max - p.Min;
+            float largest = Mathf.Max(size.x, size.y, size.z);
+            if (p.Tree)
+            {
+                health = 45f;
+                capacity = 400f;
+            }
+            else if (n.Contains("container") || n.Contains("contaigner") || n.Contains("metal") || n.Contains("pipe") || n.Contains("beam"))
+            {
+                health = 120f;
+                capacity = 600f;
+            }
+            else if (largest < 2.5f || n.Contains("fence") || n.Contains("crate") || n.Contains("box") || n.Contains("pallet")
+                || n.Contains("barrel") || n.Contains("chair") || n.Contains("table") || n.Contains("shelf") || n.Contains("plank"))
+            {
+                health = 35f;
+                capacity = 200f;
+            }
+            else if (n.Contains("wood") || n.Contains("barn") || n.Contains("shack") || n.Contains("single") || n.Contains("double"))
             {
                 health = 70f;
                 capacity = 260f;
@@ -258,7 +313,11 @@ namespace TabgInstaller.Destruction
                 if (n.Fragment < 0 || FragmentIsLast(p))
                 {
                     if (p.Standalone)
+                    {
                         commit.HideRenderers.Add(p);
+                        if (p.LodSiblings != null)
+                            commit.HideLods.Add(p);
+                    }
                     foreach (ColliderSource c in p.Colliders)
                         commit.DisableColliders.Add(c);
                 }
@@ -334,6 +393,11 @@ namespace TabgInstaller.Destruction
                     Anchored = p.Anchored,
                     Piece = i,
                 });
+            }
+            foreach (Piece p in Pieces)
+            {
+                if (p.LodSiblings != null && !p.Standalone)
+                    commit.HideLods.Add(p);
             }
 
             var grid = new Dictionary<long, List<int>>();
@@ -467,11 +531,35 @@ namespace TabgInstaller.Destruction
         private void MakeDebris(Blast blast, List<Death> deaths, Commit commit, float amount)
         {
             uint rng = blast.Seq * 2654435761u + 1;
-            int small = 0;
+            int small = 0, whole = 0;
             var collapsing = new Dictionary<long, List<Death>>();
             foreach (Death d in deaths)
             {
                 Node n = _graph.Nodes[d.Node];
+                Piece piece = Pieces[n.Piece];
+                if ((piece.Tree || piece.Standalone) && n.Fragment < 0)
+                {
+                    if (whole < MaxWholeDebris * amount)
+                    {
+                        DebrisData falling = piece.Standalone ? WholeDebris(piece) : MakeChunk(new[] { d }, Vector3.zero, ref rng);
+                        if (falling != null)
+                        {
+                            // Tips over away from the blast, pivoting on its base.
+                            Vector3 away = n.Centre - blast.Position;
+                            away.y = 0f;
+                            if (away.sqrMagnitude < 0.01f)
+                                away = new Vector3(Hash.Unit(ref rng) - 0.5f, 0f, Hash.Unit(ref rng) - 0.5f);
+                            away.Normalize();
+                            falling.Velocity = away * (1f + 2f * Hash.Unit(ref rng)) + Vector3.up * 0.5f;
+                            falling.Spin = Vector3.Cross(Vector3.up, away) * (0.8f + 0.8f * Hash.Unit(ref rng));
+                            commit.Debris.Add(falling);
+                            whole++;
+                        }
+                    }
+                    if (commit.Dust.Count < MaxDustPerBlast && Hash.Unit(ref rng) < 0.5f)
+                        commit.Dust.Add(n.Centre);
+                    continue;
+                }
                 if (d.Cause == DeathCause.Unsupported)
                 {
                     long key = ClusterKey(d.Group, n.Centre);
@@ -558,10 +646,24 @@ namespace TabgInstaller.Destruction
                 Centre = centre,
                 Mesh = builder.Build(-centre),
                 Size = max - min,
-                Mass = Mathf.Clamp(mass * 8f, 2f, 4000f),
+                Mass = Mathf.Clamp(mass * 8f, 2f, 400f),
                 Velocity = velocity,
                 Spin = new Vector3(Hash.Unit(ref rng) - 0.5f, Hash.Unit(ref rng) - 0.5f, Hash.Unit(ref rng) - 0.5f) * 3f,
-                Life = 7f + 6f * Hash.Unit(ref rng),
+            };
+        }
+
+        /// <summary>The original object as one falling body (trees, unreadable meshes).</summary>
+        private static DebrisData WholeDebris(Piece p)
+        {
+            if (p.Mesh == null)
+                return null;
+            Vector3 size = p.Max - p.Min;
+            return new DebrisData
+            {
+                Centre = (p.Min + p.Max) * 0.5f,
+                Size = size,
+                Mass = Mathf.Clamp(p.Area * 8f, 5f, 400f),
+                Whole = p,
             };
         }
 
@@ -637,6 +739,14 @@ namespace TabgInstaller.Destruction
             {
                 if (p.Renderer != null)
                     p.Renderer.enabled = false;
+            }
+            foreach (Piece p in c.HideLods)
+            {
+                foreach (Renderer r in p.LodSiblings)
+                {
+                    if (r != null)
+                        r.enabled = false;
+                }
             }
             foreach (ColliderSource col in c.DisableColliders)
             {
@@ -751,6 +861,14 @@ namespace TabgInstaller.Destruction
                 {
                     if (p.Renderer != null && !p.Merged)
                         p.Renderer.enabled = true;
+                    if (p.LodSiblings != null)
+                    {
+                        for (int i = 0; i < p.LodSiblings.Length; i++)
+                        {
+                            if (p.LodSiblings[i] != null)
+                                p.LodSiblings[i].enabled = p.LodSiblingsEnabled[i];
+                        }
+                    }
                     foreach (ColliderSource c in p.Colliders)
                     {
                         if (c.Collider != null)

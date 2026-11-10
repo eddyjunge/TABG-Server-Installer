@@ -18,7 +18,7 @@ namespace TabgInstaller.Destruction
     /// applies it, so holes are identical for all players with this mod, also for late joiners.
     /// Needs a host with <c>game.destruction</c> on; on any other server the mod stays inactive.
     /// </summary>
-    [BepInPlugin("tabginstaller.destruction", "TABG Destruction", "1.0.0")]
+    [BepInPlugin("tabginstaller.destruction", "TABG Destruction", "1.1.0")]
     [BepInDependency("tabginstaller.modsettings", BepInDependency.DependencyFlags.SoftDependency)]
     public class DestructionPlugin : BaseUnityPlugin
     {
@@ -31,11 +31,11 @@ namespace TabgInstaller.Destruction
         /// <summary>Per-blast statistics: on request, and always in the real-client tests.</summary>
         internal bool Verbose => LogExplosions.Value || Environment.GetEnvironmentVariable("TABG_AUTOJOIN") != null;
 
+        /// <summary>Melee hits, heals and effects that only look like explosions.</summary>
         private static readonly string[] NotBlasts =
         {
-            "katana", "sword", "summon", "torrent", "promise", "jarl", "viking", "blessing", "spell",
-            "heal", "freez", "ice", "time", "gravity", "reveal", "implosion", "blackhole", "stun",
-            "knockback", "splinter", "spotted", "drop", "shockwave", "gauss", "taser",
+            "katana", "sword", "blessing", "heal", "freez", "ice", "time", "gravity", "reveal", "stun",
+            "spotted", "shockwave", "taser", "spelldrop",
         };
 
         private readonly List<Blast> _pending = new List<Blast>();
@@ -148,9 +148,11 @@ namespace TabgInstaller.Destruction
         {
             if (_index == null)
                 return;
-            foreach (Structure s in _index.Structures)
+            foreach (Structure s in _index.Active)
                 s.Restore();
+            _index.Active.Clear();
             _index.Merged.Restore();
+            _debris?.Clear();
         }
 
         internal void OnExplode(Explosion e)
@@ -159,8 +161,10 @@ namespace TabgInstaller.Destruction
                 return;
             string name = (e.transform.root.name + " " + e.name).ToLowerInvariant();
             float radius = e.radius * (e.scale ? e.transform.localScale.x : 1f);
-            // Effect pools set themselves up at the world origin.
-            bool blast = e.damage >= 20f && radius >= 1.5f && e.transform.position != Vector3.zero;
+            // Effect pools set themselves up at the world origin. Knockback, implosion and black holes
+            // do little damage but push hard: they count by their force.
+            float force = Mathf.Abs(e.force);
+            bool blast = (e.damage >= 20f || force >= 100f) && radius >= 1.5f && e.transform.position != Vector3.zero;
             foreach (string s in NotBlasts)
                 blast &= !name.Contains(s);
             if (Verbose)
@@ -169,7 +173,7 @@ namespace TabgInstaller.Destruction
                 return;
 
             float hole = Mathf.Clamp(1.4f + 0.35f * radius, 2.2f, 9f);
-            float power = Mathf.Clamp(e.damage * 2f, 40f, 400f);
+            float power = Mathf.Clamp(Mathf.Max(e.damage * 2f, force * 0.3f), 40f, 400f);
             if (name.Contains("missile") || name.Contains("rocket"))
             {
                 hole = Mathf.Max(hole, 3.6f);
@@ -192,8 +196,9 @@ namespace TabgInstaller.Destruction
             }
             if (_pending.Count > 0)
                 FlushBlasts();
-            foreach (Structure s in _index.Structures)
-                s.Pump(_root, _debris);
+            for (int i = 0; i < _index.Active.Count; i++)
+                _index.Active[i].Pump(_root, _debris);
+            _debris.Tick();
         }
 
         private void BuildIndex()
@@ -213,13 +218,10 @@ namespace TabgInstaller.Destruction
             foreach (Blast blast in _pending)
             {
                 int hit = 0;
-                foreach (Structure s in _index.Structures)
+                foreach (Structure s in _index.Near(blast.Position, blast.Radius))
                 {
-                    if (s.Overlaps(blast.Position, blast.Radius))
-                    {
-                        s.Enqueue(blast, viewer, DebrisAmount.Value);
-                        hit++;
-                    }
+                    s.Enqueue(blast, viewer, DebrisAmount.Value);
+                    hit++;
                 }
                 _history.Add(blast);
                 if (Verbose)
