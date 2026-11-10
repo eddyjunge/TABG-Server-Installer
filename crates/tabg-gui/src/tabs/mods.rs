@@ -4,7 +4,7 @@ use eframe::egui::{
     self, Align, CornerRadius, Frame, Layout, Margin, Rect, Stroke, Ui, pos2, vec2,
 };
 use serde_json::Value;
-use tabg_host::config::NetMode;
+use tabg_host::config::{DESTRUCTION_MOD, NetMode};
 use tabg_host::share::CatalogEntry;
 
 use crate::app::{Gui, Msg, Pick};
@@ -151,7 +151,7 @@ fn effective_count(on: &[String], catalog: Option<&[CatalogEntry]>) -> usize {
 }
 
 fn mods_card(gui: &mut Gui, ui: &mut Ui) {
-    let on = mods_on(&gui.draft.mods.client);
+    let on = mods_on(&gui.draft.client_mods());
     let catalog = gui.catalog.clone();
     let count = format!("{} on", effective_count(&on, catalog.as_deref()));
     card_fill(
@@ -190,11 +190,18 @@ fn mod_row(
     catalog: Option<&[CatalogEntry]>,
     (x_name, x_key, x_what): (f32, f32, f32),
 ) {
-    let explicit = on.iter().any(|e| e == m.id);
+    let explicit = mods_on(&gui.draft.mods.client).iter().any(|e| e == m.id);
+    // Destruction follows the Rules switch; it is only ticked here by hand in older configs.
+    let rule = m.id == DESTRUCTION_MOD && !explicit;
+    let auto = rule && gui.draft.game.destruction;
     let needer = needed_by(m.id, on, catalog);
     let published = catalog.is_none_or(|c| c.iter().any(|e| e.id == m.id));
     let note = if !published {
         Some("not published yet".to_owned())
+    } else if auto {
+        Some("added, destructible buildings are on (Rules)".to_owned())
+    } else if rule {
+        Some("turn on destructible buildings in Rules".to_owned())
     } else if !explicit {
         needer.map(|n| format!("added, {n} needs it"))
     } else {
@@ -202,8 +209,8 @@ fn mod_row(
     };
     let height = if note.is_some() { 48.0 } else { 34.0 };
     row(ui, height, None, |ui, rect| {
-        let mut value = explicit || needer.is_some();
-        let enabled = published && !gui.applying && (explicit || needer.is_none());
+        let mut value = explicit || auto || needer.is_some();
+        let enabled = published && !gui.applying && (explicit || (needer.is_none() && !rule));
         let area = Rect::from_center_size(
             pos2(rect.left() + 31.0, rect.top() + 17.0),
             vec2(20.0, 20.0),
@@ -303,7 +310,7 @@ impl Gui {
     fn make_share(&mut self) {
         self.t.share.busy = true;
         self.t.share.error = None;
-        let mods = self.saved.mods.client.clone();
+        let mods = self.saved.client_mods();
         self.bg(move |h| {
             let result = h.runtime.block_on(tabg_web::api::make_share(&h.app));
             Msg::Share(result, mods)
@@ -363,11 +370,11 @@ fn share_card(gui: &mut Gui, ui: &mut Ui) {
                         if code.is_some() {
                             let current_join = gui.status.join_code.as_deref();
                             let share = &gui.t.share;
-                            let stale_mods = share.mods != gui.saved.mods.client;
+                            let stale_mods = share.mods != gui.saved.client_mods();
                             let stale_join =
                                 current_join.is_some() && share.join.as_deref() != current_join;
                             let on = effective_count(
-                                &mods_on(&gui.saved.mods.client),
+                                &mods_on(&gui.saved.client_mods()),
                                 gui.catalog.as_deref(),
                             );
                             let note = if stale_mods {
@@ -424,7 +431,7 @@ fn message_card(gui: &mut Gui, ui: &mut Ui) {
         .clone()
         .or_else(|| gui.t.share.join.clone());
     let lines = friends_message(
-        !gui.saved.mods.client.is_empty(),
+        !gui.saved.client_mods().is_empty(),
         join.as_deref(),
         direct,
         &gui.saved.game.password,

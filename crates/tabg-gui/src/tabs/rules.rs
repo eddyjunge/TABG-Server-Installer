@@ -285,7 +285,7 @@ fn right(
             check(ui, "Destructible buildings", &mut d.game.destruction);
             changed_tag(ui, d.game.destruction != cx.saved.game.destruction);
         });
-        hint(ui, w, muted("Needs Destruction"));
+        hint(ui, w, muted("Adds Destruction to the share code"));
         field(ui, "Bot radar", w, |ui| {
             select(
                 ui,

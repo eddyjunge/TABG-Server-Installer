@@ -129,12 +129,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.destruction {
-        let reply = |op: u8| probe.seen.payloads.iter().filter(|(c, p)| *c == 246 && p.get(5) == Some(&op)).count();
+        let reply = |op: u8| {
+            probe
+                .seen
+                .payloads
+                .iter()
+                .filter(|(c, p)| *c == 246 && p.get(5) == Some(&op))
+                .count()
+        };
         println!("destruction: accepted {}, denied {}", reply(2), reply(3));
-        for (_, p) in probe.seen.payloads.iter().filter(|(c, p)| *c == 246 && p.get(5) == Some(&5)) {
+        for (_, p) in probe
+            .seen
+            .payloads
+            .iter()
+            .filter(|(c, p)| *c == 246 && p.get(5) == Some(&5))
+        {
             let f = |at: usize| f32::from_le_bytes([p[at], p[at + 1], p[at + 2], p[at + 3]]);
             let seq = u32::from_le_bytes([p[6], p[7], p[8], p[9]]);
-            println!("destruction: blast {seq} at ({:.2}, {:.2}, {:.2}) radius {} power {}", f(10), f(14), f(18), f(22), f(26));
+            println!(
+                "destruction: blast {seq} at ({:.2}, {:.2}, {:.2}) radius {} power {}",
+                f(10),
+                f(14),
+                f(18),
+                f(22),
+                f(26)
+            );
         }
     }
 

@@ -173,8 +173,8 @@ fn is_file_entry(entry: &str) -> bool {
     entry.to_ascii_lowercase().ends_with(".dll")
 }
 
-/// Build the share for `config.mods.client`: `id@version` / `id` from the catalog, or a path to
-/// a DLL of your own (relative paths are relative to the server folder).
+/// Build the share for `config.client_mods()`: `id@version` / `id` from the catalog, or a path
+/// to a DLL of your own (relative paths are relative to the server folder).
 pub fn build(
     paths: &Paths,
     config: &ServerToml,
@@ -183,13 +183,14 @@ pub fn build(
 ) -> Result<Pack, String> {
     let mut pack = Pack::default();
     pack.code.join = join;
-    let catalog_needed = config.mods.client.iter().any(|e| !is_file_entry(e));
+    let client = config.client_mods();
+    let catalog_needed = client.iter().any(|e| !is_file_entry(e));
     let catalog = if catalog_needed {
         load_catalog(paths)?.0
     } else {
         Vec::new()
     };
-    for entry in &config.mods.client {
+    for entry in &client {
         if is_file_entry(entry) {
             let path = Path::new(entry);
             let path = if path.is_absolute() {

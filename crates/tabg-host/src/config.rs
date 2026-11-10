@@ -173,7 +173,8 @@ pub struct Game {
     pub bots: u8,
     /// Show the bots on the admin-radar client mod: off, admins, everyone.
     pub bot_radar: BotRadar,
-    /// Buildings can be blown apart with grenades and rockets (destruction client mod).
+    /// Buildings can be blown apart with grenades and rockets. Adds the destruction client mod
+    /// to the share code.
     pub destruction: bool,
     /// Check drops, throws and healing against what the server saw a player pick up:
     /// off, log (report in the server log) or enforce (refuse). Ammo is never checked.
@@ -211,7 +212,7 @@ impl Default for Game {
             respawn_minigame: false,
             bots: 0,
             bot_radar: BotRadar::Off,
-            destruction: true,
+            destruction: false,
             inventory_check: InventoryCheck::Log,
             unused_vehicles: 0.0,
             unused_vehicles_max: 15,
@@ -370,7 +371,23 @@ pub const HEADER: &str = "\
 # you). Unknown keys are errors. See docs/DESIGN.md §5.2.
 ";
 
+/// Catalog id of the client mod `game.destruction` needs.
+pub const DESTRUCTION_MOD: &str = "destruction";
+
 impl ServerToml {
+    /// The client mods friends need: `mods.client`, plus the Destruction mod when
+    /// `game.destruction` is on (unless it's listed already).
+    pub fn client_mods(&self) -> Vec<String> {
+        let mut mods = self.mods.client.clone();
+        let listed = mods
+            .iter()
+            .any(|e| e.split('@').next() == Some(DESTRUCTION_MOD));
+        if self.game.destruction && !listed {
+            mods.push(DESTRUCTION_MOD.into());
+        }
+        mods
+    }
+
     pub fn parse(text: &str) -> Result<Self, String> {
         toml::from_str(text).map_err(|e| e.to_string())
     }
@@ -684,6 +701,17 @@ pub fn get_key(config: &ServerToml, key: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destruction_adds_its_client_mod_once() {
+        let mut c = ServerToml::default();
+        assert!(c.client_mods().is_empty());
+        c.game.destruction = true;
+        c.mods.client = vec!["visuals".into()];
+        assert_eq!(c.client_mods(), ["visuals", "destruction"]);
+        c.mods.client = vec!["destruction@1.0.0".into()];
+        assert_eq!(c.client_mods(), ["destruction@1.0.0"]);
+    }
 
     #[test]
     fn default_round_trips_and_is_valid() {

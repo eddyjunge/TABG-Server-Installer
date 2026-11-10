@@ -396,7 +396,7 @@ pub async fn settings(State(app): State<AppState>) -> Markup {
                         (field("Tick rate", "tick_rate", g.tick_rate, "Movement updates per second."))
                     (field("Voice range (m)", "voice_range", g.voice_range, "For friends with the ProximityChat mod; 0: off."))
                     (check("Allow any outfit (custom-game-skins mod)", "skins", g.skins))
-                    (check("Destructible buildings (destruction mod)", "destruction", g.destruction))
+                    (check("Destructible buildings (adds the destruction mod to the share code)", "destruction", g.destruction))
                     (field("Bots", "bots", g.bots, "Fill island matches with bots (they count towards players to start)."))
                     (field("Unused vehicles", "unused_vehicles", g.unused_vehicles, "Chance per map car to add a helicopter, UFO, hover bike… next to it (0: off). Flying needs the flying-controls mod."))
                     div {
@@ -584,6 +584,9 @@ pub async fn share(State(app): State<AppState>) -> Markup {
                 h2 style="margin-top:0" { "Client mods" }
                 p.muted { "Optional extras friends need on their side. One per line: a catalog mod as " code { "id@version" } ", or a path to a DLL of your own (served to friends from this PC)." }
                 textarea name="mods" rows="5" { (c.mods.client.join("\n")) }
+                @if c.game.destruction && c.client_mods().len() > c.mods.client.len() {
+                    p.muted { code { "destruction" } " is added too, because destructible buildings are on (Settings)." }
+                }
                 div.row style="margin-top:10px" { button { "Save mods" } span id="mods-result" {} }
             }
             div.card {

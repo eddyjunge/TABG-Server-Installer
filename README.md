@@ -218,7 +218,7 @@ All of them are optional. Friends get them through the share code, never by hand
 | ModSettings | `mod-settings` | In-game settings for the other mods | F9 |
 | PerformanceClient | `performance-client` | FPS, culling, streaming and network optimizations, with a frame-time overlay | F10 |
 | PopupBlocker | `popup-blocker` | Hides the anti-cheat popups in the modded copy | |
-| Destruction | `destruction` | Grenades and rockets break buildings (see [Destruction](#destruction)) | |
+| Destruction | `destruction` | Grenades and rockets break buildings (see [Destruction](#destruction)). Added automatically with `game.destruction` | |
 | Visuals | `visuals` | Better lighting, clouds, smoke, weather and sea (see [Visuals](#visuals)) | F8 |
 
 ## Proximity Voice Chat
@@ -275,8 +275,9 @@ Grenades and rockets break buildings where they hit, and whatever loses its supp
 - Clients report blasts (event 246). The server merges reports of the same blast, keeps one ordered
   log for the match and sends it to everyone. Each client breaks the buildings the same way from
   that log, so all players with the mod see the same holes, also if they join later.
-- Everyone on the server should have the mod: add `destruction` to the client mods. Hosts can turn
-  it off with `game.destruction = false` (it's on by default).
+- Turn on **Destructible buildings** on the Rules tab (or `game.destruction = true`; it's off by
+  default). The mod is then added to the share code automatically, so everyone who joins with it
+  has it.
 
 ## Visuals
 
@@ -329,7 +330,7 @@ bots = 0
 bot_radar = "off"            # "off", "admins" or "everyone" (AdminRadar mod)
 voice_range = 50.0
 skins = false                # all built-in skins (CustomGameSkins mod)
-destruction = true           # buildings break (Destruction mod)
+destruction = false          # buildings break; adds the Destruction mod to the share code
 unused_vehicles = 0.0
 inventory_check = "log"      # "off", "log" (report in the console) or "enforce" (refuse)
 

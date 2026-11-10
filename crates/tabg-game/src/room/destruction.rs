@@ -249,7 +249,11 @@ mod tests {
         room.tick(10.0);
         assert_eq!(blasts(&room.handle(1, &report([0.0, 0.0, 0.0]))), 1);
         room.tick(11.0);
-        assert_eq!(blasts(&room.handle(1, &report([0.0, 0.0, 0.0]))), 1, "same spot, a second later");
+        assert_eq!(
+            blasts(&room.handle(1, &report([0.0, 0.0, 0.0]))),
+            1,
+            "same spot, a second later"
+        );
     }
 
     #[test]
@@ -274,7 +278,10 @@ mod tests {
         let mut w = header(REPORT);
         w.vec3([0.0; 3]).f32(4000.0).f32(1.0);
         assert!(room.handle(1, &packet(w)).is_empty(), "radius");
-        assert!(room.handle(9, &report([0.0; 3])).is_empty(), "never said hello");
+        assert!(
+            room.handle(9, &report([0.0; 3])).is_empty(),
+            "never said hello"
+        );
     }
 
     #[test]

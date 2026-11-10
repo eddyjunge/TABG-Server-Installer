@@ -404,6 +404,7 @@ fn screenshots() {
         tabg_host::config::LoadoutItem { item: 52, qty: 3 },
     ];
     gui.saved.rules.respawn = true;
+    gui.saved.game.destruction = true;
     gui.saved.rules.gun_game = (0..10)
         .map(|_| vec![tabg_host::config::LoadoutItem { item: 160, qty: 1 }])
         .collect();
