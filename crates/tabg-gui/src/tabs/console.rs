@@ -14,7 +14,7 @@ use super::LogFilter;
 use super::overview::tidy;
 
 /// Console commands: (name, arguments, what it does).
-const COMMANDS: [(&str, &str, &str); 8] = [
+const COMMANDS: [(&str, &str, &str); 9] = [
     ("start", "", "Starts the match from the lobby"),
     ("say", "text", "Sends a message to everyone"),
     ("players", "", "Lists who's online"),
@@ -26,6 +26,11 @@ const COMMANDS: [(&str, &str, &str); 8] = [
         "Drops an item next to a player",
     ),
     ("heal", "player", "Heals to full"),
+    (
+        "weather",
+        "[name|auto]",
+        "Sets the weather for everyone with Visuals",
+    ),
     ("vehicles", "", "Lists the vehicles on the map"),
 ];
 

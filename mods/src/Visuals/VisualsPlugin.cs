@@ -13,7 +13,7 @@ namespace TabgInstaller.Visuals
     ///    when the game's own shadow option is High (PerformanceClient's profile sets it to Low).
     /// Purely cosmetic; nothing is sent to the server.
     /// </summary>
-    [BepInPlugin("tabginstaller.visuals", "TABG Visuals", "1.6.0")]
+    [BepInPlugin("tabginstaller.visuals", "TABG Visuals", "1.7.0")]
     [BepInDependency("tabginstaller.modsettings", BepInDependency.DependencyFlags.HardDependency)]
     public class VisualsPlugin : BaseUnityPlugin
     {

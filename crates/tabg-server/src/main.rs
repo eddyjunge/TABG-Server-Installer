@@ -33,7 +33,7 @@ struct Args {
     #[arg(long, default_value_t = 0.25)]
     time_of_day: f32,
     /// Player name with admin rights (repeatable; `*` = everyone). Admins can force-start and
-    /// use chat commands: /start, /give <item> [qty], /heal, /kick <name>.
+    /// use chat commands: /start, /give <item> [qty], /heal, /kick <name>, /weather <name|auto>.
     #[arg(long = "admin")]
     admins: Vec<String>,
     /// Seed for ring positions and the plane path (random by default).

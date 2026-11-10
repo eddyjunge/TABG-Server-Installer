@@ -54,6 +54,7 @@ mod taxi;
 mod vehicle_combat;
 mod vehicles;
 mod voice;
+mod weather;
 pub use console::{PlayerInfo, RoomEvent};
 pub use extras::SpellDrops;
 pub use vehicles::VehicleRules;
@@ -225,6 +226,7 @@ pub struct Room {
     /// Peers whose radar mod said hello.
     radar_watchers: Vec<u8>,
     destruction: destruction::DestructionState,
+    weather: weather::WeatherState,
     vehicles: vehicles::VehicleState,
     combat: vehicle_combat::CombatState,
     taxis: taxi::TaxiState,
@@ -267,6 +269,7 @@ impl Room {
             skins_authorized: Vec::new(),
             radar_watchers: Vec::new(),
             destruction: Default::default(),
+            weather: Default::default(),
             vehicles: Default::default(),
             combat: Default::default(),
             taxis: Default::default(),
@@ -352,6 +355,7 @@ impl Room {
         self.skins_authorized.retain(|&p| p != peer);
         self.radar_watchers.retain(|&p| p != peer);
         self.destruction_forget(peer);
+        self.weather_forget(peer);
         self.forget_vehicle_client(peer);
         self.eject(peer);
         // Leaving mid-match drops your loot, like dying (official `PlayerLeaveCommand`).
@@ -394,6 +398,9 @@ impl Room {
         }
         if packet.code == destruction::DESTRUCTION {
             return self.destruction_message(peer, &packet.payload);
+        }
+        if packet.code == weather::WEATHER {
+            return self.weather_message(peer, &packet.payload);
         }
         if packet.code == vehicles::VEHICLES {
             return self.vehicle_message(peer, &packet.payload);

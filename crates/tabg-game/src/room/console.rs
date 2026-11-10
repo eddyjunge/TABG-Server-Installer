@@ -85,7 +85,7 @@ enum Source {
 }
 
 const HELP: &str = "commands: start, say <text>, players, kick <player>, ban <player>, \
-                    give [player] <item> [qty], heal [player], vehicles, \
+                    give [player] <item> [qty], heal [player], weather [name|auto], vehicles, \
                     vehicle <name> (in game), fpv (in game)";
 
 impl Room {
@@ -203,6 +203,7 @@ impl Room {
         let rest: Vec<&str> = words.collect();
         match verb.as_str() {
             "" | "help" => (Vec::new(), HELP.into()),
+            "weather" => self.weather_command(rest.first().copied()),
             "start" => {
                 let out = self.force_start();
                 let reply = if out.is_empty() {
@@ -348,5 +349,38 @@ impl Room {
             },
             other => (Vec::new(), format!("unknown command {other:?}; {HELP}")),
         }
+    }
+}
+
+impl Room {
+    /// `/weather`: show the weather, or force one for every player with the Visuals mod.
+    fn weather_command(&mut self, arg: Option<&str>) -> (Vec<Outgoing>, String) {
+        let names = super::weather::NAMES.join(", ");
+        let Some(arg) = arg else {
+            let now = self.weather_name().unwrap_or("auto (follows the biome)");
+            return (
+                Vec::new(),
+                format!("weather: {now}. /weather <{names}|auto>"),
+            );
+        };
+        let choice = if arg.eq_ignore_ascii_case("auto") {
+            None
+        } else {
+            match super::weather::parse(arg) {
+                Some(name) => Some(name),
+                None => {
+                    return (
+                        Vec::new(),
+                        format!("no weather {arg}; one of {names}, auto"),
+                    );
+                }
+            }
+        };
+        let (out, players) = self.set_weather(choice);
+        let what = choice.unwrap_or("auto (follows the biome)");
+        (
+            out,
+            format!("weather: {what} for {players} player(s) with Visuals"),
+        )
     }
 }

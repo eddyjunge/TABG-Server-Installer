@@ -63,6 +63,11 @@ namespace TabgInstaller.Visuals
         internal static float Sand, Gust;
         internal static Vector2 WindOffset;
         internal static Color PrecipColor = Color.white;
+        /// <summary>The weather a tabg server's admin picked with /weather (WeatherSync); null = none.</summary>
+        internal static volatile string ServerForce;
+
+        /// <summary>The server's pick wins over the local Force setting, so every player sees the same.</summary>
+        private static string Forced(VisualsPlugin p) => ServerForce ?? p.WeatherForce.Value;
 
         private static float _snow, _rain, _dust, _wind, _fogDensity, _overcast, _lightning;
         private static Color _fogColor = SnowFog;
@@ -103,7 +108,7 @@ namespace TabgInstaller.Visuals
             }
 
             float now = Time.unscaledTime;
-            string force = p.WeatherForce.Value;
+            string force = Forced(p);
             bool forced = force != _force;
             if (forced) _force = force;
             if (now >= _nextSample || forced)
@@ -168,10 +173,11 @@ namespace TabgInstaller.Visuals
 
         private static void Sample(VisualsPlugin p, Vector3 at)
         {
-            if (p.WeatherForce.Value != "Auto")
+            string force = Forced(p);
+            if (force != "Auto")
             {
                 foreach (var e in AllEvents())
-                    if (e.Name == p.WeatherForce.Value)
+                    if (e.Name == force)
                     {
                         ClearTargets();
                         Add(e, 1f);

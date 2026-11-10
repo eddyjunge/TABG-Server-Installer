@@ -178,6 +178,7 @@ Admins are set on the Players page or with `tabg admins add <name>`. These comma
 | `/kick <name>` · `/ban <name>` | Kick or ban (bans are saved to `tabg.toml`) |
 | `/give <item> [qty]` | Drop an item next to you |
 | `/heal` | Full health |
+| `/weather [name\|auto]` | Show the weather, or set it for everyone with Visuals: Clear, Overcast, Mist, Rain, Storm, Flurries, Snowfall, Blizzard, Haze, Sandstorm; `auto` follows the biome again |
 | `/vehicles` · `/vehicle <name>` | List vehicles, or spawn one in front of you (FlyingControls players) |
 | `/fpv` | Get an FPV drone |
 
@@ -287,8 +288,9 @@ furniture and rocks crack open, whatever loses its support comes down, and trees
 
 ## Visuals
 
-A client-side graphics upgrade on top of TABG's own look. It changes nothing on the server and
-nothing other players see, and every part has a setting in the **F8** menu.
+A client-side graphics upgrade on top of TABG's own look. It changes nothing other players see,
+and every part has a setting in the **F8** menu. Admins can pick the weather for everyone with
+`/weather`.
 
 | Part | What it does |
 |---|---|
