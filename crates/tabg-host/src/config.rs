@@ -230,6 +230,9 @@ pub struct Ring {
     pub sizes: Vec<f32>,
     /// How fast each ring closes in.
     pub speeds: Vec<f32>,
+    /// `[x, z]`: every ring is centred here (a fixed arena) instead of at a random spot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f32; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -477,6 +480,13 @@ impl ServerToml {
                 p.push(problem(field, "only positive numbers"));
             }
         }
+        if self
+            .ring
+            .center
+            .is_some_and(|c| c.iter().any(|v| !v.is_finite() || v.abs() > 5000.0))
+        {
+            p.push(problem("ring.center", "[x, z] inside the map (-5000 to 5000)"));
+        }
         if !self.ring.sizes.is_empty() && self.ring.sizes.windows(2).any(|w| w[1] > w[0]) {
             p.push(problem(
                 "ring.sizes",
@@ -617,6 +627,7 @@ impl ServerToml {
         if !self.ring.speeds.is_empty() {
             s.ring.speeds.clone_from(&self.ring.speeds);
         }
+        s.ring.fixed_center = self.ring.center.map(|[x, z]| [x, 0.0, z]);
         s.loadout = self.loadout.iter().map(|l| (l.item, l.qty)).collect();
         let r = &self.rules;
         s.respawn = r.respawn.then_some(tabg_game::Respawn {

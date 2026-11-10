@@ -20,6 +20,8 @@ pub struct RingRules {
     pub center: [f32; 3],
     /// Preferred centres for rings after the 2nd (may be empty).
     pub hot_spots: Vec<[f32; 3]>,
+    /// Every ring is centred here instead of at a random spot (a fixed arena).
+    pub fixed_center: Option<[f32; 3]>,
 }
 
 impl Default for RingRules {
@@ -31,6 +33,7 @@ impl Default for RingRules {
             base_time: 200.0,
             center: [0.0; 3],
             hot_spots: Vec::new(),
+            fixed_center: None,
         }
     }
 }
@@ -210,7 +213,9 @@ impl Ring {
         self.id += 1;
         let new_size = self.rules.sizes[self.id];
         let radius = (self.white_size * 0.5 - new_size * 0.5 - 100.0).abs();
-        let center = if self.id == 5 {
+        let center = if let Some(fixed) = self.rules.fixed_center {
+            fixed
+        } else if self.id == 5 {
             [
                 self.white_center[0],
                 self.white_center[1],
@@ -289,6 +294,30 @@ mod tests {
             ring.tick(66.7 + 100.5, &mut rng),
             vec![RingEvent::StartedMoving]
         );
+    }
+
+    #[test]
+    fn a_fixed_ring_closes_fast_around_its_centre_and_stays() {
+        let mut rng = Rng::new(4);
+        let rules = RingRules {
+            sizes: vec![4240.0, 320.0],
+            speeds: vec![25.0, 20.0],
+            fixed_center: Some([125.0, 0.0, -97.0]),
+            ..RingRules::default()
+        };
+        let mut ring = Ring::new(rules, &mut rng);
+        assert_eq!(ring.white_center, [125.0, 0.0, -97.0]);
+        assert_eq!(ring.white_size, 320.0);
+        ring.start(0.0);
+        // 200 / 20 = 10 s to close in.
+        ring.tick(10.1, &mut rng);
+        assert!(!ring.is_moving());
+        let mut t = 10.1;
+        while t < 3000.0 {
+            t += 1.0;
+            assert!(ring.tick(t, &mut rng).is_empty(), "the ring never moves again");
+        }
+        assert_eq!(ring.current(t), ([125.0, 0.0, -97.0], 320.0));
     }
 
     #[test]

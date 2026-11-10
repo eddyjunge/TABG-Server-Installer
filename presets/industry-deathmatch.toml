@@ -1,0 +1,42 @@
+title = "Industry Deathmatch"
+description = "The ring closes around Industry in 10 s and stays there. Respawn 5 s after dying inside it, armed with guns and grenades. First to 20 kills wins."
+
+[config.game]
+mode = "battle_royale"
+map = "island"
+teams = "solo"
+players_to_start = 2
+countdown = 10
+loot_amount = 0.1
+destruction = true
+
+[config.ring]
+times = []
+sizes = [4240, 280]
+speeds = [25, 20]
+center = [105, -65]
+
+[config.rules]
+respawn = true
+respawn_delay = 5
+kills_to_win = 20
+time_limit = 0
+gun_game = []
+
+[config]
+loadout = [
+  { item = 152, qty = 1 },   # AK-47
+  { item = 297, qty = 1 },   # Mossberg-500
+  { item = 266, qty = 1 },   # Desert Eagle
+  { item = 6, qty = 240 },   # Normal Ammo
+  { item = 8, qty = 60 },    # Shotgun Ammo
+  { item = 1, qty = 60 },    # Big Ammo
+  { item = 197, qty = 5 },   # Grenade
+  { item = 193, qty = 2 },   # Cluster Grenade
+  { item = 196, qty = 2 },   # Fire Grenade
+  { item = 214, qty = 2 },   # Dynamite
+  { item = 212, qty = 2 },   # Stun Grenade
+  { item = 208, qty = 2 },   # Smoke Grenade
+  { item = 131, qty = 5 },   # Bandage
+  { item = 132, qty = 2 },   # Med Kit
+]

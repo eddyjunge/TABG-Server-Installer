@@ -52,6 +52,10 @@ const BUILTIN: &[(&str, &str)] = &[
         "deathmatch",
         include_str!("../../../presets/deathmatch.toml"),
     ),
+    (
+        "industry-deathmatch",
+        include_str!("../../../presets/industry-deathmatch.toml"),
+    ),
     ("gun-game", include_str!("../../../presets/gun-game.toml")),
     (
         "shooting-range",

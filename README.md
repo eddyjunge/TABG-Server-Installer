@@ -148,6 +148,7 @@ control your server.
 | Loot Frenzy | Four times the loot, and everyone lands with bandages | none |
 | Armed Drop | Everyone lands with an M16, ammo and heals | none |
 | Deathmatch | Respawns, first to 20 kills or most kills after 15 minutes | none |
+| Industry Deathmatch | The ring closes around Industry in 10 s and stays; respawns with guns and grenades, first to 20 kills | `destruction` |
 | Gun Game | 10 weapon levels, ending with the katana | none |
 | Brawl | Spawn houses on the castle map, first team to 20 kills | none |
 | Bomb | First to 7 rounds on TABG_CS | none |
@@ -333,6 +334,11 @@ skins = false                # all built-in skins (CustomGameSkins mod)
 destruction = false          # buildings break; adds the Destruction mod to the share code
 unused_vehicles = 0.0
 inventory_check = "log"      # "off", "log" (report in the console) or "enforce" (refuse)
+
+[ring]                       # empty lists keep the map's rings
+sizes = [4240, 280]          # diameters, largest first
+speeds = [25, 20]            # 200 s / speed per shrink: 20 closes in 10 s
+center = [105, -65]          # [x, z]: every ring is centred here (Industry); omit for random rings
 
 [players]
 admins = []
